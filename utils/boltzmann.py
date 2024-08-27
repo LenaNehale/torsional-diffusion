@@ -31,8 +31,10 @@ class BoltzmannResampler:
             data_new = copy.deepcopy(data)
             samples.append(data_new)
         samples = perturb_seeds(samples)
-        samples = sample(samples, model, steps=args.boltzmann_steps, ode=True,
+        samples = sample(samples, model, steps=args.boltzmann_steps, ode=False,
                          sigma_max=args.sigma_max, sigma_min=args.sigma_min, likelihood=args.likelihood)
+        #samples = sample(samples, model, steps=args.boltzmann_steps, ode=True,
+                        #sigma_max=args.sigma_max, sigma_min=args.sigma_min, likelihood=args.likelihood)
 
         data.pos = []
         logweights = []

@@ -5,12 +5,12 @@ def parse_train_args():
 
     # General arguments
     parser = ArgumentParser()
-    parser.add_argument('--log_dir', type=str, default='./test_run', help='Folder in which to save model and logs')
-    parser.add_argument('--restart_dir', type=str, help='Folder of previous training model from which to restart')
-    parser.add_argument('--cache', type=str, default='data/DRUGS/cache', help='Folder from where to load/restore cached dataset')
-    parser.add_argument('--data_dir', type=str, default='data/DRUGS/drugs/', help='Folder containing original conformers')
-    parser.add_argument('--std_pickles', type=str, default='data/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
-    parser.add_argument('--split_path', type=str, default='data/DRUGS/split.npy', help='Path of file defining the split')
+    parser.add_argument('--log_dir', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/test_run', help='Folder in which to save model and logs')
+    parser.add_argument('--restart_dir', default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/drugs_seed_boltz' ,  type=str, help='Folder of previous training model from which to restart')
+    parser.add_argument('--cache', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/cache/test_run', help='Folder from where to load/restore cached dataset')
+    parser.add_argument('--data_dir', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
+    parser.add_argument('--std_pickles', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
+    parser.add_argument('--split_path', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
 
@@ -25,7 +25,7 @@ def parse_train_args():
     parser.add_argument('--sigma_min', type=float, default=0.01*3.14, help='Minimum sigma used for training')
     parser.add_argument('--sigma_max', type=float, default=3.14, help='Maximum sigma used for training')
     parser.add_argument('--limit_train_mols', type=int, default=0, help='Limit to the number of molecules in dataset, 0 uses them all')
-    parser.add_argument('--boltzmann_weight', action='store_true', default=False, help='Whether to sample conformers based on B.w.')
+    parser.add_argument('--boltzmann_weight', action='store_true', default=True, help='Whether to sample conformers based on B.w.')
 
     # Feature arguments
     parser.add_argument('--in_node_features', type=int, default=74, help='Dimension of node features: 74 for drugs and xl, 44 for qm9')
@@ -44,7 +44,7 @@ def parse_train_args():
     parser.add_argument('--use_second_order_repr', action='store_true', default=False, help='Whether to use only up to first order representations or also second')
 
     # Boltzmann training arguments
-    parser.add_argument('--boltzmann_training', action='store_true', default=False, help='Set to true for torsional Boltzmann training')
+    parser.add_argument('--boltzmann_training', action='store_true', default=True, help='Set to true for torsional Boltzmann training')
     parser.add_argument('--boltzmann_confs', type=int, default=32, help='Number of conformers to generate at each resampling step')
     parser.add_argument('--boltzmann_steps', type=int, default=5, help='Number of inference steps used by the resampler')
     parser.add_argument('--likelihood', type=str, default='full', help='Method to evaluate likelihood: full (default) or hutch')

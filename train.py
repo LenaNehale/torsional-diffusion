@@ -49,7 +49,7 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
 
 def boltzmann_train(args, model, optimizer, train_loader, val_loader, resampler):
-    print("Starting training...")
+    print("Starting Boltzmann training...")
 
     val_ess = val_loader.dataset.resample_all(resampler, temperature=args.temp)
     print(f"Initial val ESS: Mean {np.mean(val_ess):.4f} Median {np.median(val_ess):.4f}")

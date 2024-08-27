@@ -105,6 +105,8 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)[:-1]
     eps = 1 / steps
 
+    
+
     if pg_weight_log_0 is not None and pg_weight_log_1 is not None:
         edge_index, edge_mask = conformers[0].edge_index, conformers[0].edge_mask
         edge_list = [[] for _ in range(torch.max(edge_index) + 1)]
@@ -154,6 +156,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 pg_invariant = False
 
     for batch_idx, data in enumerate(loader):
+        logp_trajs = torch.zeros(data.num_graphs, len(sigma_schedule))
 
         dlogp = torch.zeros(data.num_graphs)
         data_gpu = copy.deepcopy(data).to(device)
@@ -206,9 +209,22 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
 
                 perturb = (0.5 * g ** 2 * eps * score) + langevin_weight * (0.5 * g ** 2 * eps * score + g * np.sqrt(eps) * z)
                 perturb += pg_weight * (g ** 2 * eps * (score + pg_repulsive_weight * repulsive))
+            
+                mean, std = 0.5 * g ** 2 * eps * score + langevin_weight * (0.5 * g ** 2 * eps * score)  ,  langevin_weight * g * np.sqrt(eps)+torch.eye(data_gpu.edge_pred.shape[0])
+            else:
+                mean, std = g ** 2 * eps * score, g * np.sqrt(eps)*torch.eye(data_gpu.edge_pred.shape[0])
+            # compute the transitions logprobs
+            
+            for i in range(data.num_graphs):
+                n_torsion_angles = len(perturb) // data.num_graphs
+                start, end = i*n_torsion_angles, (i+1)*n_torsion_angles
+                mvn = torch.distributions.MultivariateNormal(mean[start:end], std[start:end, start:end])
+                logp_trajs[i,sigma_idx ] = mvn.log_prob(perturb[start:end])
+            breakpoint()
 
             conf_dataset.apply_torsion_and_update_pos(data, perturb.numpy())
             data_gpu.pos = data.pos.to(device)
+    
 
             if pdb:
                 for conf_idx in range(data.num_graphs):
@@ -220,6 +236,8 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 conformers[data.idx[i]].dlogp = d.item()
 
     return conformers
+
+
 
 
 def pyg_to_mol(mol, data, mmff=False, rmsd=True, copy=True):
