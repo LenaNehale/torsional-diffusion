@@ -13,11 +13,10 @@ from rdkit.Chem import AllChem
 from utils.utils import time_limit, TimeoutException
 from utils.visualise import PDBFile
 from spyrmsd import molecule, graph
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 still_frames = 10
-
-
+from diffusion import torus
+from einops import reduce
 def try_mmff(mol):
     try:
         AllChem.MMFFOptimizeMoleculeConfs(mol, mmffVariant='MMFF94s')
@@ -92,6 +91,8 @@ def perturb_seeds(data, pdb=None):
             pdb.add(data_conf.pos, part=i, order=1, repeat=still_frames)
     return data
 
+def g(t):
+    pass
 
 def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20, batch_size=32,
            ode=False, likelihood=None, pdb=None, pg_weight_log_0=None, pg_repulsive_weight_log_0=None,
@@ -156,7 +157,8 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 pg_invariant = False
 
     for batch_idx, data in enumerate(loader):
-        logp_trajs = torch.zeros(data.num_graphs, len(sigma_schedule))
+        logit_trajs_forward = torch.zeros(data.num_graphs, len(sigma_schedule))
+        logit_trajs_backward = torch.zeros(data.num_graphs, len(sigma_schedule))
 
         dlogp = torch.zeros(data.num_graphs)
         data_gpu = copy.deepcopy(data).to(device)
@@ -181,6 +183,8 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                     dlogp += -0.5 * g ** 2 * eps * div
             else:
                 perturb = g ** 2 * eps * score + g * np.sqrt(eps) * z
+                div = divergence(model, data, data_gpu, method='full')
+                dlogp += -0.5 * g ** 2 * eps * div
 
             if pg_weight > 0:
                 n = data.num_graphs
@@ -213,18 +217,21 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 mean, std = 0.5 * g ** 2 * eps * score + langevin_weight * (0.5 * g ** 2 * eps * score)  ,  langevin_weight * g * np.sqrt(eps)+torch.eye(data_gpu.edge_pred.shape[0])
             else:
                 mean, std = g ** 2 * eps * score, g * np.sqrt(eps)*torch.eye(data_gpu.edge_pred.shape[0])
-            # compute the transitions logprobs
-            
+            # compute the forward and backward (in gflownet language) transitions logprobs 
+    
             for i in range(data.num_graphs):
                 n_torsion_angles = len(perturb) // data.num_graphs
                 start, end = i*n_torsion_angles, (i+1)*n_torsion_angles
-                mvn = torch.distributions.MultivariateNormal(mean[start:end], std[start:end, start:end])
-                logp_trajs[i,sigma_idx ] = mvn.log_prob(perturb[start:end])
-            breakpoint()
+                # in forward, the new mean is obtained using the score (see above)
+                p_trajs_forward = torus.p(perturb[start:end].cpu().numpy() - mean[start:end].cpu().numpy(), g.cpu().numpy() ) 
+                logit_trajs_forward[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_forward)).sum() 
+                # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0
+                p_trajs_backward = torus.p( - perturb[start:end].cpu().numpy() , g.cpu().numpy() ) 
+                logit_trajs_backward[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_backward)).sum() 
 
             conf_dataset.apply_torsion_and_update_pos(data, perturb.numpy())
             data_gpu.pos = data.pos.to(device)
-    
+            
 
             if pdb:
                 for conf_idx in range(data.num_graphs):
@@ -234,7 +241,14 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
 
             for i, d in enumerate(dlogp):
                 conformers[data.idx[i]].dlogp = d.item()
-
+        
+        bs = data.num_graphs
+        logit_trajs_forward = reduce(logit_trajs_forward, 'bs steps-> bs', 'sum' )
+        logit_trajs_backward = reduce(logit_trajs_backward, 'bs steps-> bs', 'sum' )
+        # Sanity check. Here we have bs (=32) sampled trajectories for the same smiles molecule. Ins gfn language we can compare logp(x0) = log( \int_{tau ~ x0} pf(tau)/pb(tau) dtau)  ≈ logsumexp(1/bs * (logit_trajs_forward - logit_trajs_backward))
+        print(torch.logsumexp(1/bs * (logit_trajs_forward - logit_trajs_backward), dim=0), dlogp)
+        breakpoint()
+         
     return conformers
 
 
