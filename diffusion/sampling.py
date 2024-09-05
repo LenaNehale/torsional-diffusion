@@ -160,10 +160,13 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 pg_invariant = False
     
     for batch_idx, data in enumerate(loader):
-        logit_pf = torch.zeros(data.num_graphs, len(sigma_schedule))
-        logit_pb = torch.zeros(data.num_graphs, len(sigma_schedule))
+        
+        bs = data.num_graphs
+        n_torsion_angles = len(data.total_perturb[0]) 
 
-        dlogp = torch.zeros(data.num_graphs)
+        logit_pf = torch.zeros(bs, len(sigma_schedule))
+        logit_pb = torch.zeros(bs, len(sigma_schedule))
+        dlogp = torch.zeros(bs)
         data_gpu = copy.deepcopy(data).to(device)
         for sigma_idx, sigma in enumerate(sigma_schedule):
 
@@ -220,8 +223,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 mean, std = g ** 2 * eps * score, g * np.sqrt(eps)*torch.eye(data_gpu.edge_pred.shape[0])
             
             # compute the forward and backward (in gflownet language) transitions logprobs
-            for i in range(data.num_graphs):
-                n_torsion_angles = len(perturb) // data.num_graphs
+            for i in range(bs):
                 start, end = i*n_torsion_angles, (i+1)*n_torsion_angles
                 # in forward, the new mean is obtained using the score (see above)
                 p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), g.cpu().numpy() ) 
@@ -235,7 +237,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
             
 
             if pdb:
-                for conf_idx in range(data.num_graphs):
+                for conf_idx in range(bs):
                     coords = data.pos[data.ptr[conf_idx]:data.ptr[conf_idx + 1]]
                     num_frames = still_frames if sigma_idx == steps - 1 else 1
                     pdb.add(coords, part=batch_size * batch_idx + conf_idx, order=sigma_idx + 2, repeat=num_frames)
@@ -243,12 +245,29 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
             for i, d in enumerate(dlogp):
                 conformers[data.idx[i]].dlogp = d.item()
         
-        bs = data.num_graphs
         logit_pf = reduce(logit_pf, 'bs steps-> bs', 'sum' )
         logit_pb = reduce(logit_pb, 'bs steps-> bs', 'sum' )
-        # Sanity check. Ins gfn language we can compare logp(x0) ≈ logit_pf(tau) - logit_pb(tau), where tau is a trajectory that leads to x0
-        # TODO compute exact likelihood of samples
-        print('ogit_pf - logit_pb', logit_pf - logit_pb)
+        # Sanity check: compute exact likelihood of samples using the reverse ODE
+        logp = torch.zeros(bs)
+        data_likelihood = copy.deepcopy(data)
+        data_likelihood_gpu = copy.deepcopy(data_gpu)
+        for sigma_idx, sigma in enumerate(reversed(sigma_schedule)):
+            data_likelihood_gpu.node_sigma = sigma * torch.ones(data_likelihood.num_nodes, device=device)
+            with torch.no_grad():
+                data_likelihood_gpu = model(data_likelihood_gpu)
+            ## apply reverse ODE perturbation
+            g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+            z = torch.normal(mean=0, std=1, size=data_likelihood_gpu.edge_pred.shape)
+            score = data_likelihood_gpu.edge_pred.cpu()
+            perturb =  - 0.5 * g ** 2 * eps * score
+            conf_dataset.apply_torsion_and_update_pos(data_likelihood, perturb.numpy())
+            ## compute dlogp
+            div = divergence(model, data_likelihood, data_likelihood_gpu, method=likelihood)
+            logp += -0.5 * g ** 2 * eps * div
+            data_likelihood_gpu.pos = data_likelihood.pos.to(device)
+   
+        print('logit_pf - logit_pb', logit_pf - logit_pb)
+        print('logp', logp)
         #Computing logrews
         pos = rearrange(data.pos, '(bs n) d -> bs n d', bs=bs)
         z = rearrange(data.z, '(bs n) -> bs n', bs=bs)
