@@ -70,7 +70,7 @@ Then to test it:
 
 ## Particle Guidance sampling
 
-In [this manuscript]() we propose a new sampling method for jointly sampling a set of particles using diffusion models that we call particle guidance. We demonstrate that for the task of molecular conformer generation this provides significant improvements in precision and recall compared to standard I.I.D. diffusion sampling. To run the particle guidance sampling with torsional diffusion to replicate the results of the paper (similarly you can run on your own molecules)
+In this manuscript https://arxiv.org/pdf/2310.13102 we propose a new sampling method for jointly sampling a set of particles using diffusion models that we call particle guidance. We demonstrate that for the task of molecular conformer generation this provides significant improvements in precision and recall compared to standard I.I.D. diffusion sampling. To run the particle guidance sampling with torsional diffusion to replicate the results of the paper (similarly you can run on your own molecules)
 
 For the permutation invariant kernel guidance (higher quality, slower):
 
