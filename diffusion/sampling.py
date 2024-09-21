@@ -9,7 +9,7 @@ from torch_geometric.data import Dataset
 from torch_geometric.loader import DataLoader
 from rdkit import Chem, Geometry
 from rdkit.Chem import AllChem
-
+from utils.utils import get_model
 from utils.utils import time_limit, TimeoutException
 from utils.visualise import PDBFile
 from spyrmsd import molecule, graph
@@ -92,10 +92,81 @@ def perturb_seeds(data, pdb=None):
             pdb.add(data_conf.pos, part=i, order=1, repeat=still_frames)
     return data
 
-def g(t):
-    pass
+
+def get_dihedrals(conformers,pg_weight_log_0, pg_weight_log_1, pg_invariant,mol ):
+    edge_index, edge_mask = conformers[0].edge_index, conformers[0].edge_mask
+    edge_list = [[] for _ in range(torch.max(edge_index) + 1)]
+
+    for p in edge_index.T:
+        edge_list[p[0]].append(p[1])
+
+    rot_bonds = [(p[0], p[1]) for i, p in enumerate(edge_index.T) if edge_mask[i]]
+
+    dihedral = []
+    for a, b in rot_bonds:
+        c = edge_list[a][0] if edge_list[a][0] != b else edge_list[a][1]
+        d = edge_list[b][0] if edge_list[b][0] != a else edge_list[b][1]
+        dihedral.append((c.item(), a.item(), b.item(), d.item()))
+    dihedral_numpy = np.asarray(dihedral)
+    dihedral = torch.tensor(dihedral)
+
+    if pg_invariant:
+        try:
+            with time_limit(10):
+                mol = molecule.Molecule.from_rdkit(mol)
+
+                aprops = mol.atomicnums
+                am = mol.adjacency_matrix
+
+                # Convert molecules to graphs
+                G = graph.graph_from_adjacency_matrix(am, aprops)
+
+                # Get all the possible graph isomorphisms
+                isomorphisms = graph.match_graphs(G, G)
+                isomorphisms = [iso[0] for iso in isomorphisms]
+                isomorphisms = np.asarray(isomorphisms)
+
+                # filter out those having an effect on the dihedrals
+                dih_iso = isomorphisms[:, dihedral_numpy]
+                dih_iso = np.unique(dih_iso, axis=0)
+
+                if len(dih_iso) > 32:
+                    print("reduce isomorphisms from", len(dih_iso), "to", 32)
+                    dih_iso = dih_iso[np.random.choice(len(dih_iso), replace=False, size=32)]
+                else:
+                    print("isomorphisms", len(dih_iso))
+                dih_iso = torch.from_numpy(dih_iso).to(device)
+
+        except TimeoutException as e:
+            print("Timeout generating with non invariant kernel")
+            pg_invariant = False 
+            dih_iso = None  
+    return dihedral, dih_iso
 
 
+def get_repulsive_kernel(data, data_gpu,dihedral, dih_iso,  pg_invariant, pg_kernel_size_log_0, pg_kernel_size_log_1, t):
+    n = data.num_graphs
+    if pg_invariant:
+        S, D, _ = dih_iso.shape
+        dih_iso_cat = dih_iso.reshape(-1, 4)
+        tau = get_torsion_angles(dih_iso_cat, data_gpu.pos, n)
+        tau_diff = tau.unsqueeze(1) - tau.unsqueeze(0)
+        tau_diff = torch.fmod(tau_diff + 3 * np.pi, 2 * np.pi) - np.pi
+        tau_diff = tau_diff.reshape(n, n, S, D)
+        tau_matrix = torch.sum(tau_diff ** 2, dim=-1, keepdim=True)
+        tau_matrix, indices = torch.min(tau_matrix, dim=2)
+        tau_diff = torch.gather(tau_diff, 2, indices.unsqueeze(-1).repeat(1, 1, 1, D)).squeeze(2)
+    else:
+        tau = get_torsion_angles(dihedral, data_gpu.pos, n)
+        tau_diff = tau.unsqueeze(1) - tau.unsqueeze(0)
+        tau_diff = torch.fmod(tau_diff+3*np.pi, 2*np.pi)-np.pi
+        assert torch.all(tau_diff < np.pi + 0.1) and torch.all(tau_diff > -np.pi - 0.1), tau_diff
+        tau_matrix = torch.sum(tau_diff**2, dim=-1, keepdim=True)
+
+    kernel_size = 10 ** (pg_kernel_size_log_0 * t + pg_kernel_size_log_1 * (1 - t)) if pg_kernel_size_log_0 is not None and pg_kernel_size_log_1 is not None else 1.0
+    k = torch.exp(-1 / kernel_size * tau_matrix)
+    repulsive = torch.sum(2/kernel_size*tau_diff*k, dim=1).cpu().reshape(-1) / n
+    return repulsive
 
 def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20, batch_size=32,
            ode=False, likelihood=None, pdb=None, pg_weight_log_0=None, pg_repulsive_weight_log_0=None,
@@ -105,79 +176,26 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
 
     conf_dataset = InferenceDataset(conformers)
     loader = DataLoader(conf_dataset, batch_size=batch_size, shuffle=False)
-
-    sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)[:-1]
+    sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
     eps = 1 / steps
-
-    energy = Energy(oracle='torchani')
-
+    #energy = Energy(oracle='torchani')
     if pg_weight_log_0 is not None and pg_weight_log_1 is not None:
-        edge_index, edge_mask = conformers[0].edge_index, conformers[0].edge_mask
-        edge_list = [[] for _ in range(torch.max(edge_index) + 1)]
-
-        for p in edge_index.T:
-            edge_list[p[0]].append(p[1])
-
-        rot_bonds = [(p[0], p[1]) for i, p in enumerate(edge_index.T) if edge_mask[i]]
-
-        dihedral = []
-        for a, b in rot_bonds:
-            c = edge_list[a][0] if edge_list[a][0] != b else edge_list[a][1]
-            d = edge_list[b][0] if edge_list[b][0] != a else edge_list[b][1]
-            dihedral.append((c.item(), a.item(), b.item(), d.item()))
-        dihedral_numpy = np.asarray(dihedral)
-        dihedral = torch.tensor(dihedral)
-
-        if pg_invariant:
-            try:
-                with time_limit(10):
-                    mol = molecule.Molecule.from_rdkit(mol)
-
-                    aprops = mol.atomicnums
-                    am = mol.adjacency_matrix
-
-                    # Convert molecules to graphs
-                    G = graph.graph_from_adjacency_matrix(am, aprops)
-
-                    # Get all the possible graph isomorphisms
-                    isomorphisms = graph.match_graphs(G, G)
-                    isomorphisms = [iso[0] for iso in isomorphisms]
-                    isomorphisms = np.asarray(isomorphisms)
-
-                    # filter out those having an effect on the dihedrals
-                    dih_iso = isomorphisms[:, dihedral_numpy]
-                    dih_iso = np.unique(dih_iso, axis=0)
-
-                    if len(dih_iso) > 32:
-                        print("reduce isomorphisms from", len(dih_iso), "to", 32)
-                        dih_iso = dih_iso[np.random.choice(len(dih_iso), replace=False, size=32)]
-                    else:
-                        print("isomorphisms", len(dih_iso))
-                    dih_iso = torch.from_numpy(dih_iso).to(device)
-
-            except TimeoutException as e:
-                print("Timeout generating with non invariant kernel")
-                pg_invariant = False
+        dihedral, dih_iso = get_dihedrals(conformers,pg_weight_log_0, pg_weight_log_1, pg_invariant,mol )
     
     for batch_idx, data in enumerate(loader):
-        
         bs = data.num_graphs
         n_torsion_angles = len(data.total_perturb[0]) 
-
         logit_pf = torch.zeros(bs, len(sigma_schedule))
         logit_pb = torch.zeros(bs, len(sigma_schedule))
         dlogp = torch.zeros(bs)
         data_gpu = copy.deepcopy(data).to(device)
-        for sigma_idx, sigma in enumerate(sigma_schedule):
-
+        for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
             data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
             with torch.no_grad():
                 data_gpu = model(data_gpu)
-
             g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
             z = torch.normal(mean=0, std=1, size=data_gpu.edge_pred.shape)
             score = data_gpu.edge_pred.cpu()
-
             t = sigma_idx / steps   # t is really 1-t
             pg_weight = 10**(pg_weight_log_0 * t + pg_weight_log_1 * (1 - t)) if pg_weight_log_0 is not None and pg_weight_log_1 is not None else 0.0
             pg_repulsive_weight = 10**(pg_repulsive_weight_log_0 * t + pg_repulsive_weight_log_1 * (1 - t)) if pg_repulsive_weight_log_0 is not None and pg_repulsive_weight_log_1 is not None else 1.0
@@ -185,55 +203,43 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
             if ode:
                 perturb = 0.5 * g ** 2 * eps * score
                 if likelihood:
-                    div = divergence(model, data, data_gpu, method=likelihood)
+                    div = divergence(model, data, data_gpu, method=likelihood) # warning: this function changes data_gpu.pos
                     dlogp += -0.5 * g ** 2 * eps * div
             else:
                 perturb = g ** 2 * eps * score + g * np.sqrt(eps) * z
 
             if pg_weight > 0:
-                n = data.num_graphs
-                if pg_invariant:
-                    S, D, _ = dih_iso.shape
-                    dih_iso_cat = dih_iso.reshape(-1, 4)
-                    tau = get_torsion_angles(dih_iso_cat, data_gpu.pos, n)
-                    tau_diff = tau.unsqueeze(1) - tau.unsqueeze(0)
-                    tau_diff = torch.fmod(tau_diff + 3 * np.pi, 2 * np.pi) - np.pi
-                    tau_diff = tau_diff.reshape(n, n, S, D)
-                    tau_matrix = torch.sum(tau_diff ** 2, dim=-1, keepdim=True)
-                    tau_matrix, indices = torch.min(tau_matrix, dim=2)
-                    tau_diff = torch.gather(tau_diff, 2, indices.unsqueeze(-1).repeat(1, 1, 1, D)).squeeze(2)
-                else:
-                    tau = get_torsion_angles(dihedral, data_gpu.pos, n)
-                    tau_diff = tau.unsqueeze(1) - tau.unsqueeze(0)
-                    tau_diff = torch.fmod(tau_diff+3*np.pi, 2*np.pi)-np.pi
-                    assert torch.all(tau_diff < np.pi + 0.1) and torch.all(tau_diff > -np.pi - 0.1), tau_diff
-                    tau_matrix = torch.sum(tau_diff**2, dim=-1, keepdim=True)
-
-                kernel_size = 10 ** (pg_kernel_size_log_0 * t + pg_kernel_size_log_1 * (1 - t)) if pg_kernel_size_log_0 is not None and pg_kernel_size_log_1 is not None else 1.0
+                repulsive = get_repulsive_kernel(data, data_gpu,dihedral, dih_iso,  pg_invariant, pg_kernel_size_log_0, pg_kernel_size_log_1, t)
                 langevin_weight = 10 ** (pg_langevin_weight_log_0 * t + pg_langevin_weight_log_1 * (1 - t)) if pg_langevin_weight_log_0 is not None and pg_langevin_weight_log_1 is not None else 1.0
-
-                k = torch.exp(-1 / kernel_size * tau_matrix)
-                repulsive = torch.sum(2/kernel_size*tau_diff*k, dim=1).cpu().reshape(-1) / n
-
                 perturb = (0.5 * g ** 2 * eps * score) + langevin_weight * (0.5 * g ** 2 * eps * score + g * np.sqrt(eps) * z)
-                perturb += pg_weight * (g ** 2 * eps * (score + pg_repulsive_weight * repulsive))
-            
-                mean, std = 0.5 * g ** 2 * eps * score + langevin_weight * (0.5 * g ** 2 * eps * score)  ,  langevin_weight * g * np.sqrt(eps)+torch.eye(data_gpu.edge_pred.shape[0])
+                perturb += pg_weight * (g ** 2 * eps * (score + pg_repulsive_weight * repulsive))         
+                mean, std = 0.5 * g ** 2 * eps * score + langevin_weight * (0.5 * g ** 2 * eps * score) +  pg_weight * (g ** 2 * eps * (score + pg_repulsive_weight * repulsive)) ,  langevin_weight * g * np.sqrt(eps)
             else:
-                mean, std = g ** 2 * eps * score, g * np.sqrt(eps)*torch.eye(data_gpu.edge_pred.shape[0])
+                mean, std = g ** 2 * eps * score, g * np.sqrt(eps)
             
             # compute the forward and backward (in gflownet language) transitions logprobs
             for i in range(bs):
                 start, end = i*n_torsion_angles, (i+1)*n_torsion_angles
                 # in forward, the new mean is obtained using the score (see above)
-                p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), g.cpu().numpy() ) 
+                p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), std.cpu().numpy() ) 
                 logit_pf[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_forward)).sum() 
-                # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0
-                p_trajs_backward = torus.p( - perturb[start:end].cpu().numpy() , g.cpu().numpy() ) 
+                # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
+                sigma_b = sigma_schedule[sigma_idx + 1]
+                g_b = sigma_b * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+                std_b = g_b * np.sqrt(eps)
+                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std_b.cpu().numpy() ) 
                 logit_pb[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_backward)).sum() 
+            if sigma_idx == steps - 1:
+                p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), std.cpu().numpy() ) 
+                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std.cpu().numpy() ) 
 
             conf_dataset.apply_torsion_and_update_pos(data, perturb.numpy())
             data_gpu.pos = data.pos.to(device)
+            #print('|perturb|', torch.abs(perturb).mean(), torch.abs(perturb).max(), torch.abs(perturb).min())
+            #print('|mean|', torch.abs(mean).mean(), torch.abs(mean).max(), torch.abs(mean).min())
+            #print('|perturb - mean|', torch.abs(perturb - mean).mean(), torch.abs(perturb - mean).max(), torch.abs(perturb - mean).min())
+
+
             
 
             if pdb:
@@ -251,7 +257,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
         logp = torch.zeros(bs)
         data_likelihood = copy.deepcopy(data)
         data_likelihood_gpu = copy.deepcopy(data_gpu)
-        for sigma_idx, sigma in enumerate(reversed(sigma_schedule)):
+        for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
             data_likelihood_gpu.node_sigma = sigma * torch.ones(data_likelihood.num_nodes, device=device)
             with torch.no_grad():
                 data_likelihood_gpu = model(data_likelihood_gpu)
@@ -265,22 +271,27 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
             div = divergence(model, data_likelihood, data_likelihood_gpu, method=likelihood)
             logp += -0.5 * g ** 2 * eps * div
             data_likelihood_gpu.pos = data_likelihood.pos.to(device)
-   
-        print('logit_pf - logit_pb', logit_pf - logit_pb)
-        print('logp', logp)
+        
+        
+        #print('logit_pf - logit_pb', logit_pf - logit_pb)
+        #print('logp', logp)
+        print('Correlation(logit_pf - logit_pb,logp )', torch.corrcoef(torch.stack([logit_pf - logit_pb, logp]))[0,1])
+
         #Computing logrews
         pos = rearrange(data.pos, '(bs n) d -> bs n d', bs=bs)
         z = rearrange(data.z, '(bs n) -> bs n', bs=bs)
-        logrews = energy.logrew(z, pos)
+        #logrews = energy.logrew(z, pos)
         #Computing vargradloss. 
         try:
-            assert all(x == data.canonical_smi[0] for x in data.canonical_smi)
+            #assert all(x == data.name[0] for x in data.name) 
+            all(x == data.canonical_smi[0] for x in data.canonical_smi)
+            
         except:
             raise ValueError("Vargrad loss should be computed for the same molecule only ! Otherwise we have different Zs, so doesn't make sense")
-        vargrad_quotients = logit_pf - logit_pb - logrews
-        vargrad_loss = torch.var(vargrad_quotients)
-        print('vargrad loss', vargrad_loss)
-        breakpoint()
+            
+       # vargrad_quotients = logit_pf - logit_pb - logrews
+        #vargrad_loss = torch.var(vargrad_quotients)
+        #print('vargrad loss', vargrad_loss)
     
     return conformers
 

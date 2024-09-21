@@ -6,7 +6,7 @@ def parse_train_args():
     # General arguments
     parser = ArgumentParser()
     parser.add_argument('--log_dir', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/test_run', help='Folder in which to save model and logs')
-    parser.add_argument('--restart_dir', default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/drugs_seed_boltz' ,  type=str, help='Folder of previous training model from which to restart')
+    parser.add_argument('--restart_dir', default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T500' ,  type=str, help='Folder of previous training model from which to restart')
     parser.add_argument('--cache', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/cache/test_run', help='Folder from where to load/restore cached dataset')
     parser.add_argument('--data_dir', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
     parser.add_argument('--std_pickles', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')

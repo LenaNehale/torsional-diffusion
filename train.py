@@ -21,7 +21,7 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
     best_val_loss = math.inf
     best_epoch = 0
 
-    print("Starting training...")
+    print("Starting training (not boltzmann)...")
     for epoch in range(args.n_epochs):
 
         train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)

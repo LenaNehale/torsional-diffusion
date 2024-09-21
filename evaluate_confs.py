@@ -9,8 +9,8 @@ from tqdm import tqdm
 
 parser = ArgumentParser()
 parser.add_argument('--confs', type=str, required=True, help='Path to pickle file with generated conformers')
-parser.add_argument('--test_csv', type=str, default='./data/DRUGS/test_smiles_corrected.csv', help='Path to csv file with list of smiles')
-parser.add_argument('--true_mols', type=str, default='./data/DRUGS/test_mols.pkl', help='Path to pickle file with ground truth conformers')
+parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles_corrected.csv', help='Path to csv file with list of smiles')
+parser.add_argument('--true_mols', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_mols.pkl', help='Path to pickle file with ground truth conformers')
 parser.add_argument('--n_workers', type=int, default=1, help='Numer of parallel workers')
 parser.add_argument('--limit_mols', type=int, default=0, help='Limit number of molecules, 0 to evaluate them all')
 parser.add_argument('--dataset', type=str, default="drugs", help='Dataset: drugs, qm9 and xl')

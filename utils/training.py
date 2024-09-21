@@ -15,7 +15,7 @@ def train_epoch(model, loader, optimizer, device):
 
         data = model(data)
         pred = data.edge_pred
-
+        breakpoint()
         score = torus.score(
             data.edge_rotate.cpu().numpy(),
             data.edge_sigma.cpu().numpy())

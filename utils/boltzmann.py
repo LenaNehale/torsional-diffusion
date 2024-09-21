@@ -31,10 +31,15 @@ class BoltzmannResampler:
             data_new = copy.deepcopy(data)
             samples.append(data_new)
         samples = perturb_seeds(samples)
-        samples = sample(samples, model, steps=args.boltzmann_steps, ode=False,
-                         sigma_max=args.sigma_max, sigma_min=args.sigma_min, likelihood=args.likelihood)
-        #samples = sample(samples, model, steps=args.boltzmann_steps, ode=True,
-                        #sigma_max=args.sigma_max, sigma_min=args.sigma_min, likelihood=args.likelihood)
+        samples = sample(
+            samples,
+            model,
+            steps=args.boltzmann_steps,
+            ode=True,  # False originally
+            sigma_max=args.sigma_max,
+            sigma_min=args.sigma_min,
+            likelihood=args.likelihood,
+        )
 
         data.pos = []
         logweights = []
@@ -42,14 +47,20 @@ class BoltzmannResampler:
         data.mol.RemoveAllConformers()
         for i, data_conf in enumerate(samples):
             mol = pyg_to_mol(data.mol, data_conf, mmff=False, rmsd=False)
-            populate_likelihood(mol, data_conf, water=False, xtb=None)
+            populate_likelihood(
+                mol,
+                data_conf,
+                water=False,
+                xtb="/home/mila/l/lena-nehale.ezzine/.conda/envs/torsional_diffusion/bin/xtb",
+            )
             data.pos.append(data_conf.pos)
             energy = mol.mmff_energy
+            print("xtb energy", mol.xtb_energy, "mmff energy", mol.mmff_energy)
             logweights.append(-energy / kT - mol.euclidean_dlogp)
 
         weights = np.exp(logweights - np.max(logweights))
         data.weights = weights / weights.sum()
-        data.ess = 1 / np.sum(data.weights ** 2)
+        data.ess = 1 / np.sum(data.weights**2)
         data.times_seen = 0
         model.train()
         return data.ess
@@ -73,11 +84,7 @@ class BaselineResampler:
             logp_end = -energy / kT
             frac = i / (self.ais_steps + 1)
             logp_ = (1 - frac) * logp_start + frac * logp_end
-            return {
-                'logp': logp_,
-                'E': energy,
-                'jac': logp_start
-            }
+            return {"logp": logp_, "E": energy, "jac": logp_start}
 
         return logp
 
@@ -86,11 +93,18 @@ class BaselineResampler:
 
         def transition(i, xi):
             oldlogp = logp(i, xi)
-            torsion_updates = np.random.normal(loc=0, scale=self.mcmc_sigma, size=data.edge_mask.sum())
-            xi_prop = modify_conformer(copy.deepcopy(xi), data.edge_index.T[data.edge_mask],
-                                       data.mask_rotate, torsion_updates, as_numpy=True)
+            torsion_updates = np.random.normal(
+                loc=0, scale=self.mcmc_sigma, size=data.edge_mask.sum()
+            )
+            xi_prop = modify_conformer(
+                copy.deepcopy(xi),
+                data.edge_index.T[data.edge_mask],
+                data.mask_rotate,
+                torsion_updates,
+                as_numpy=True,
+            )
             newlogp = logp(i, xi_prop)
-            loga = newlogp['logp'] - oldlogp['logp'] + oldlogp['jac'] - newlogp['jac']
+            loga = newlogp["logp"] - oldlogp["logp"] + oldlogp["jac"] - newlogp["jac"]
             if np.random.rand() < np.exp(min(0, loga)):
                 xi = xi_prop
             return xi
@@ -98,16 +112,23 @@ class BaselineResampler:
         return transition
 
     def single_sample(self, data):
-        torsion_updates = np.random.uniform(low=-np.pi, high=np.pi, size=data.edge_mask.sum())
-        xi = modify_conformer(data.pos, data.edge_index.T[data.edge_mask],
-                              data.mask_rotate, torsion_updates, as_numpy=True)
+        torsion_updates = np.random.uniform(
+            low=-np.pi, high=np.pi, size=data.edge_mask.sum()
+        )
+        xi = modify_conformer(
+            data.pos,
+            data.edge_index.T[data.edge_mask],
+            data.mask_rotate,
+            torsion_updates,
+            as_numpy=True,
+        )
 
         logp = self.logp_func(data)
         transition = self.transition_func(data)
-        logweight = logp(1, xi)['logp'] - logp(0, xi)['logp']
+        logweight = logp(1, xi)["logp"] - logp(0, xi)["logp"]
         for i in range(1, self.ais_steps + 1):
             xi = transition(i, xi)
-            logweight += logp(i + 1, xi)['logp'] - logp(i, xi)['logp']
+            logweight += logp(i + 1, xi)["logp"] - logp(i, xi)["logp"]
 
         return xi, logweight
 
@@ -123,5 +144,5 @@ class BaselineResampler:
         data.pos = samples
         weights = np.exp(logweights - np.max(logweights))
         data.weights = weights / weights.sum()
-        data.ess = 1 / np.sum(data.weights ** 2)
+        data.ess = 1 / np.sum(data.weights**2)
         return data.ess

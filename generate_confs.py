@@ -11,10 +11,10 @@ from utils.utils import get_model
 from diffusion.sampling import *
 
 parser = ArgumentParser()
-parser.add_argument('--model_dir', type=str, required=True, help='Path to folder with trained model and hyperparameters')
+parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T500',  help='Path to folder with trained model and hyperparameters')
 parser.add_argument('--ckpt', type=str, default='best_model.pt', help='Checkpoint to use inside the folder')
-parser.add_argument('--out', type=str, help='Path to the output pickle file')
-parser.add_argument('--test_csv', type=str, default='./data/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
+parser.add_argument('--out', type=str,  help='Path to the output pickle file')
+parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
 parser.add_argument('--pre_mmff', action='store_true', default=False, help='Whether to run MMFF on the local structure conformer')
 parser.add_argument('--post_mmff', action='store_true', default=False, help='Whether to run MMFF on the final generated structures')
 parser.add_argument('--no_random', action='store_true', default=False, help='Whether avoid randomising the torsions of the seed conformer')
@@ -32,6 +32,7 @@ parser.add_argument('--dump_pymol', type=str, default=None, help='Whether to sav
 parser.add_argument('--tqdm', action='store_true', default=False, help='Whether to show progress bar')
 parser.add_argument('--water', action='store_true', default=False, help='Whether to compute xTB energy in water')
 parser.add_argument('--batch_size', type=int, default=32, help='Number of conformers generated in parallel')
+#parser.add_argument('--xtb', type=str, default='/home/mila/l/lena-nehale.ezzine/.conda/envs/torsional_diffusion/bin', help='If set, it indicates path to local xtb main directory')
 parser.add_argument('--xtb', type=str, default=None, help='If set, it indicates path to local xtb main directory')
 parser.add_argument('--no_energy', action='store_true', default=False, help='If set skips computation of likelihood, energy etc')
 
@@ -120,6 +121,7 @@ def sample_confs(raw_smi, n_confs, smi):
 
     if not args.no_random and n_rotable_bonds > 0.5:
         conformers = perturb_seeds(conformers, pdb)
+    
 
     if not args.no_model and n_rotable_bonds > 0.5:
         conformers = sample(conformers, model, args.sigma_max, args.sigma_min, args.inference_steps,
@@ -177,6 +179,8 @@ for smi_idx, (raw_smi, n_confs, smi) in test_data:
     else:
         print(f'{smi_idx} rotable_bonds={mols[0].n_rotable_bonds} n_confs={len(mols)}', smi, flush=True)
     conformer_dict[smi] = mols
+    if smi_idx>10:
+        break
 
 # save to file
 if args.out:
