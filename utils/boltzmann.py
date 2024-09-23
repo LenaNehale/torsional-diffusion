@@ -30,12 +30,22 @@ class BoltzmannResampler:
         for i in range(args.boltzmann_confs):
             data_new = copy.deepcopy(data)
             samples.append(data_new)
+        for x in samples:
+            print(f'smile {x.canonical_smi}')
+            print(f'Energy of ground truth conf', mmff_energy(x.mol))
         samples = perturb_seeds(samples)
+        # Get energies before sampling confs w diff model
+        rand_samples = copy.deepcopy(samples)
+        for x in rand_samples:
+            print(f'smile {x.canonical_smi}')
+            print(f'Energy of noised conf', mmff_energy(x.mol))
+
+
         samples = sample(
             samples,
             model,
             steps=args.boltzmann_steps,
-            ode=True,  # False originally
+            ode=False,  # False originally
             sigma_max=args.sigma_max,
             sigma_min=args.sigma_min,
             likelihood=args.likelihood,
@@ -55,6 +65,7 @@ class BoltzmannResampler:
             )
             data.pos.append(data_conf.pos)
             energy = mol.mmff_energy
+            print('Energies of samples from the diffusion model')
             print("xtb energy", mol.xtb_energy, "mmff energy", mol.mmff_energy)
             logweights.append(-energy / kT - mol.euclidean_dlogp)
 

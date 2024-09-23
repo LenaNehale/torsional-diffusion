@@ -1,6 +1,6 @@
 import os.path
 from multiprocessing import Pool
-
+from diffusion.likelihood import mmff_energy
 from rdkit import Chem
 import numpy as np
 import glob, pickle, random
@@ -233,6 +233,9 @@ class ConformerDataset(Dataset):
     def resample_all(self, resampler, temperature=None):
         ess = []
         for data in tqdm.tqdm(self.datapoints):
+            #print('smile', data.canonical_smi)
+            #energy = mmff_energy(data.mol)
+            #print(f'Energy of ground gruth conf {energy}')
             ess.append(resampler.resample(data, temperature=temperature))
         return ess
 

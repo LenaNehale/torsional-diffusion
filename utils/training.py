@@ -15,7 +15,6 @@ def train_epoch(model, loader, optimizer, device):
 
         data = model(data)
         pred = data.edge_pred
-        breakpoint()
         score = torus.score(
             data.edge_rotate.cpu().numpy(),
             data.edge_sigma.cpu().numpy())
@@ -31,6 +30,7 @@ def train_epoch(model, loader, optimizer, device):
 
     loss_avg = loss_tot / len(loader)
     base_avg = base_tot / len(loader)
+    print('train loss:', loss_avg)
     return loss_avg, base_avg
 
 

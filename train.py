@@ -23,7 +23,6 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
     print("Starting training (not boltzmann)...")
     for epoch in range(args.n_epochs):
-
         train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
         print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
 
