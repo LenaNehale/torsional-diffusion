@@ -46,7 +46,7 @@ def parse_train_args():
     # Boltzmann training arguments
     parser.add_argument('--boltzmann_training', action='store_true', default=True, help='Set to true for torsional Boltzmann training')
     parser.add_argument('--boltzmann_confs', type=int, default=32, help='Number of conformers to generate at each resampling step')
-    parser.add_argument('--boltzmann_steps', type=int, default=5, help='Number of inference steps used by the resampler')
+    parser.add_argument('--boltzmann_steps', type=int, default=20, help='Number of inference steps used by the resampler')
     parser.add_argument('--likelihood', type=str, default='full', help='Method to evaluate likelihood: full (default) or hutch')
     parser.add_argument('--temp', type=int, default=300, help='Temperature used for Boltzmann weight')
     parser.add_argument('--adjust_temp', action='store_true', default=False, help='Whether to perform the temperature annealing during training')

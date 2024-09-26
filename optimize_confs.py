@@ -6,14 +6,14 @@ from rdkit.Chem import AllChem
 from utils.xtb import *
 
 parser = ArgumentParser()
-parser.add_argument('--in_confs', type=str, required=True, help='Pickle with input conformers')
+parser.add_argument('--in_confs', type=str, default='conformers_20steps_boltz_T1000.pkl', help='Pickle with input conformers')
 parser.add_argument('--skip', type=int, default=1, help='Frequency for running procedure')
-parser.add_argument('--out_confs', type=str, required=True, help='Path to output pickle')
-parser.add_argument('--mmff', action='store_true', default=False, help='Whether to optimize with MMFF')
+parser.add_argument('--out_confs', type=str,  default='conformers_20steps_optimized_boltz_T1000.pkl', help='Path to output pickle')
+parser.add_argument('--mmff', action='store_true', default=True, help='Whether to optimize with MMFF')
 parser.add_argument('--level', type=str, default="normal", help='xTB optimization level')
 parser.add_argument('--xtb_energy', action='store_true', default=False, help='Whether to comput xTB energies')
 parser.add_argument('--xtb_path', type=str, default=None, help='Specifies local path to xTB installation')
-parser.add_argument('--limit', type=int, default=32, help='Limit in the number of conformers')
+parser.add_argument('--limit', type=int, default=None, help='Limit in the number of conformers')
 args = parser.parse_args()
 
 """
@@ -21,13 +21,18 @@ args = parser.parse_args()
     and computes the properties of each conformer
 """
 
-test_data = pd.read_csv('data/DRUGS/test_smiles_corrected.csv').values
-test_data = test_data[::args.skip]
-print('Optimizing', len(test_data), 'mols')
+#test_data = pd.read_csv('data/DRUGS/test_smiles_corrected.csv').values
+#test_data = pd.read_csv('/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv')
+
+
+#test_data = test_data[::args.skip]
 
 mols = pickle.load(open(args.in_confs, 'rb'))
+test_data = mols.keys()
+print('Optimizing', len(test_data), 'mols')
+
 new_mols = {}
-for _, _, smi in tqdm.tqdm(test_data):
+for smi in tqdm.tqdm(test_data):
     if smi not in mols:
         print('Model failure', smi)
         continue

@@ -268,7 +268,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
             perturb =  - 0.5 * g ** 2 * eps * score
             conf_dataset.apply_torsion_and_update_pos(data_likelihood, perturb.numpy())
             ## compute dlogp
-            div = divergence(model, data_likelihood, data_likelihood_gpu, method=likelihood)
+            div = divergence(model, data_likelihood, data_likelihood_gpu, method='hutch' if likelihood is None else likelihood)
             logp += -0.5 * g ** 2 * eps * div
             data_likelihood_gpu.pos = data_likelihood.pos.to(device)
         
@@ -282,13 +282,14 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
         z = rearrange(data.z, '(bs n) -> bs n', bs=bs)
         #logrews = energy.logrew(z, pos)
         #Computing vargradloss. 
+        '''
         try:
             #assert all(x == data.name[0] for x in data.name) 
-            all(x == data.canonical_smi[0] for x in data.canonical_smi)
+            assert all(x == data.canonical_smi[0] for x in data.canonical_smi)
             
         except:
             raise ValueError("Vargrad loss should be computed for the same molecule only ! Otherwise we have different Zs, so doesn't make sense")
-            
+        '''    
        # vargrad_quotients = logit_pf - logit_pb - logrews
         #vargrad_loss = torch.var(vargrad_quotients)
         #print('vargrad loss', vargrad_loss)
@@ -306,7 +307,8 @@ def pyg_to_mol(mol, data, mmff=False, rmsd=True, copy=True):
     if type(coords) is not np.ndarray:
         coords = coords.double().numpy()
     for i in range(coords.shape[0]):
-        mol.GetConformer(0).SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))
+        #mol.GetConformer(0).SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))
+        mol.GetConformer().SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))
     if mmff:
         try:
             AllChem.MMFFOptimizeMoleculeConfs(mol, mmffVariant='MMFF94s')

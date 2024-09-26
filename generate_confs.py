@@ -11,9 +11,9 @@ from utils.utils import get_model
 from diffusion.sampling import *
 
 parser = ArgumentParser()
-parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T500',  help='Path to folder with trained model and hyperparameters')
+parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T1000',  help='Path to folder with trained model and hyperparameters')
 parser.add_argument('--ckpt', type=str, default='best_model.pt', help='Checkpoint to use inside the folder')
-parser.add_argument('--out', type=str,  help='Path to the output pickle file')
+parser.add_argument('--out', type=str, default = 'conformers_20steps_boltz_T1000.pkl', help='Path to the output pickle file')
 parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
 parser.add_argument('--pre_mmff', action='store_true', default=False, help='Whether to run MMFF on the local structure conformer')
 parser.add_argument('--post_mmff', action='store_true', default=False, help='Whether to run MMFF on the final generated structures')
@@ -31,10 +31,10 @@ parser.add_argument('--likelihood', choices=['full', 'hutch'], default=None, hel
 parser.add_argument('--dump_pymol', type=str, default=None, help='Whether to save .pdb file with denoising dynamics')
 parser.add_argument('--tqdm', action='store_true', default=False, help='Whether to show progress bar')
 parser.add_argument('--water', action='store_true', default=False, help='Whether to compute xTB energy in water')
-parser.add_argument('--batch_size', type=int, default=32, help='Number of conformers generated in parallel')
+parser.add_argument('--batch_size', type=int, default=1281, help='Number of conformers generated in parallel')
 #parser.add_argument('--xtb', type=str, default='/home/mila/l/lena-nehale.ezzine/.conda/envs/torsional_diffusion/bin', help='If set, it indicates path to local xtb main directory')
 parser.add_argument('--xtb', type=str, default=None, help='If set, it indicates path to local xtb main directory')
-parser.add_argument('--no_energy', action='store_true', default=False, help='If set skips computation of likelihood, energy etc')
+parser.add_argument('--no_energy', action='store_true', default=True, help='If set skips computation of likelihood, energy etc')
 
 parser.add_argument('--pg_weight_log_0', type=float, default=None)
 parser.add_argument('--pg_weight_log_1', type=float, default=None)

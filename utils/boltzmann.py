@@ -30,16 +30,16 @@ class BoltzmannResampler:
         for i in range(args.boltzmann_confs):
             data_new = copy.deepcopy(data)
             samples.append(data_new)
-        for x in samples:
-            print(f'smile {x.canonical_smi}')
-            print(f'Energy of ground truth conf', mmff_energy(x.mol))
+        
+        print(f'smile {samples[0].canonical_smi}, Energy of initial conf{mmff_energy(samples[0].mol)}')
         samples = perturb_seeds(samples)
         # Get energies before sampling confs w diff model
-        rand_samples = copy.deepcopy(samples)
-        for x in rand_samples:
-            print(f'smile {x.canonical_smi}')
-            print(f'Energy of noised conf', mmff_energy(x.mol))
-
+        energies_noise = []
+        for i, data_conf in enumerate(samples):
+            mol = pyg_to_mol(data.mol, data_conf, mmff=False, rmsd=False)
+            energies_noise.append(mmff_energy(mol))
+        energies_noise = np.array(energies_noise)
+        print(f'Energies of noisy samples : mean {energies_noise.mean()} median {np.median(energies_noise)} std {energies_noise.std()}') 
 
         samples = sample(
             samples,
@@ -55,6 +55,7 @@ class BoltzmannResampler:
         logweights = []
 
         data.mol.RemoveAllConformers()
+        energies_samples = []
         for i, data_conf in enumerate(samples):
             mol = pyg_to_mol(data.mol, data_conf, mmff=False, rmsd=False)
             populate_likelihood(
@@ -65,10 +66,12 @@ class BoltzmannResampler:
             )
             data.pos.append(data_conf.pos)
             energy = mol.mmff_energy
-            print('Energies of samples from the diffusion model')
-            print("xtb energy", mol.xtb_energy, "mmff energy", mol.mmff_energy)
+            #print('Energies of samples from the diffusion model')
+            #print("xtb energy", mol.xtb_energy, "mmff energy", mol.mmff_energy)
+            energies_samples.append(energy)
             logweights.append(-energy / kT - mol.euclidean_dlogp)
-
+        energies_samples = np.array(energies_samples)
+        print(f'Energies of samples from the diffusion model : mean {energies_samples.mean()} median {np.median(energies_samples)} std {energies_samples.std()}')
         weights = np.exp(logweights - np.max(logweights))
         data.weights = weights / weights.sum()
         data.ess = 1 / np.sum(data.weights**2)
