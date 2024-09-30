@@ -8,9 +8,11 @@ from rdkit.Chem import AllChem
 from tqdm import tqdm
 
 parser = ArgumentParser()
-parser.add_argument('--confs', type=str, required=True, help='Path to pickle file with generated conformers')
+#parser.add_argument('--confs', type=str, required=True, help='Path to pickle file with generated conformers')
+parser.add_argument('--confs', type=str, default= 'conformers_20steps_boltz_T1000_train_first_10smis.pkl', help='Path to pickle file with generated conformers')
 parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles_corrected.csv', help='Path to csv file with list of smiles')
-parser.add_argument('--true_mols', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_mols.pkl', help='Path to pickle file with ground truth conformers')
+#parser.add_argument('--true_mols', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_mols.pkl', help='Path to pickle file with ground truth conformers')
+parser.add_argument('--true_mols', type=str, default='training_confs_first_10smis.pkl', help='Path to pickle file with ground truth conformers')
 parser.add_argument('--n_workers', type=int, default=1, help='Numer of parallel workers')
 parser.add_argument('--limit_mols', type=int, default=0, help='Limit number of molecules, 0 to evaluate them all')
 parser.add_argument('--dataset', type=str, default="drugs", help='Dataset: drugs, qm9 and xl')
@@ -26,7 +28,7 @@ args = parser.parse_args()
 with open(args.confs, 'rb') as f:
     model_preds = pickle.load(f)
 
-test_data = pd.read_csv(args.test_csv)  # this should include the corrected smiles
+#test_data = pd.read_csv(args.test_csv)  # this should include the corrected smiles
 with open(args.true_mols, 'rb') as f:
     true_mols = pickle.load(f)
 threshold = threshold_ranges = np.arange(0, 2.5, .125)
@@ -51,8 +53,28 @@ def clean_confs(smi, confs):
     return [confs[i] for i in good_ids]
 
 
-rdkit_smiles = test_data.smiles.values
-corrected_smiles = test_data.corrected_smiles.values
+#rdkit_smiles = test_data.smiles.values
+#corrected_smiles = test_data.corrected_smiles.values
+rdkit_smiles = ['CCOC(=O)c1ccc(N2NC(=O)_C(=C_c3ccc([N+](=O)[O-])o3)C2=O)cc1',
+ 'COc1cccc(C(C[N+](=O)[O-])c2c(C)[nH]n(-c3ccccc3)c2=O)c1',
+ 'S=C(NCc1ccc2c(c1)OCO2)NC1CC1',
+ 'CCN(CC)C(C(=O)NC1CCCCC1)c1ccc(C)cc1',
+ 'Cc1nc(-c2nc(-c3c(C(=O)NNC(=O)Nc4ccccc4)noc3C)cs2)cs1',
+ 'CCC1(C)Cc2c(C#N)c(N)n(N)c(=S)c2CO1',
+ 'CC(C(=O)Nc1ccccc1F)N1CC[NH+](C)CC1',
+ '[NH3+]CCCP(=O)(O)CCc1ccccc1',
+ 'Cc1ccccc1NC(=O)c1ccc(NC(=O)C2CC(=O)OC23CCCCC3)cc1',
+ 'O=C(Nc1ccccc1Oc1ccsc1C(=O)O)c1ccccc1']
+corrected_smiles = ['CCOC(=O)c1ccc(N2NC(=O)_C(=C_c3ccc([N+](=O)[O-])o3)C2=O)cc1',
+ 'COc1cccc(C(C[N+](=O)[O-])c2c(C)[nH]n(-c3ccccc3)c2=O)c1',
+ 'S=C(NCc1ccc2c(c1)OCO2)NC1CC1',
+ 'CCN(CC)C(C(=O)NC1CCCCC1)c1ccc(C)cc1',
+ 'Cc1nc(-c2nc(-c3c(C(=O)NNC(=O)Nc4ccccc4)noc3C)cs2)cs1',
+ 'CCC1(C)Cc2c(C#N)c(N)n(N)c(=S)c2CO1',
+ 'CC(C(=O)Nc1ccccc1F)N1CC[NH+](C)CC1',
+ '[NH3+]CCCP(=O)(O)CCc1ccccc1',
+ 'Cc1ccccc1NC(=O)c1ccc(NC(=O)C2CC(=O)OC23CCCCC3)cc1',
+ 'O=C(Nc1ccccc1Oc1ccsc1C(=O)O)c1ccccc1']
 
 if args.limit_mols:
     rdkit_smiles = rdkit_smiles[:args.limit_mols]

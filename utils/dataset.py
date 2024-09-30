@@ -61,11 +61,14 @@ class ConformerDataset(Dataset):
 
         if cache: cache += "." + mode
         self.cache = cache
+        '''
         if cache and os.path.exists(cache):
             print('Reusing preprocessing from cache', cache)
             with open(cache, "rb") as f:
                 self.datapoints = pickle.load(f)
         else:
+        '''
+        if True:
             print("Preprocessing")
             self.datapoints = self.preprocess_datapoints(root, split_path, pickle_dir, mode, num_workers, limit_molecules)
             if cache:

@@ -1,5 +1,5 @@
 from diffusion.sampling import *
-
+from gflownet.gfn_train import sample_and_get_loss
 
 class BoltzmannResampler:
     def __init__(self, args, model=None):
@@ -40,7 +40,10 @@ class BoltzmannResampler:
             energies_noise.append(mmff_energy(mol))
         energies_noise = np.array(energies_noise)
         print(f'Energies of noisy samples : mean {energies_noise.mean()} median {np.median(energies_noise)} std {energies_noise.std()}') 
+        
 
+        #samples, loss = sample_and_get_loss(samples, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20, batch_size=32,ode=False, likelihood=None, pdb=None, energy_fn='mmff', T = 32)
+        
         samples = sample(
             samples,
             model,
@@ -50,6 +53,8 @@ class BoltzmannResampler:
             sigma_min=args.sigma_min,
             likelihood=args.likelihood,
         )
+        
+        
 
         data.pos = []
         logweights = []
@@ -62,7 +67,7 @@ class BoltzmannResampler:
                 mol,
                 data_conf,
                 water=False,
-                xtb="/home/mila/l/lena-nehale.ezzine/.conda/envs/torsional_diffusion/bin/xtb",
+                xtb="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/xtb",
             )
             data.pos.append(data_conf.pos)
             energy = mol.mmff_energy

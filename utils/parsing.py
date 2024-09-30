@@ -44,7 +44,7 @@ def parse_train_args():
     parser.add_argument('--use_second_order_repr', action='store_true', default=False, help='Whether to use only up to first order representations or also second')
 
     # Boltzmann training arguments
-    parser.add_argument('--boltzmann_training', action='store_true', default=True, help='Set to true for torsional Boltzmann training')
+    parser.add_argument('--boltzmann_training', action='store_true', default=False, help='Set to true for torsional Boltzmann training')
     parser.add_argument('--boltzmann_confs', type=int, default=32, help='Number of conformers to generate at each resampling step')
     parser.add_argument('--boltzmann_steps', type=int, default=20, help='Number of inference steps used by the resampler')
     parser.add_argument('--likelihood', type=str, default='full', help='Method to evaluate likelihood: full (default) or hutch')

@@ -257,6 +257,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
         logp = torch.zeros(bs)
         data_likelihood = copy.deepcopy(data)
         data_likelihood_gpu = copy.deepcopy(data_gpu)
+        conf_dataset_likelihood = InferenceDataset(copy.deepcopy(conformers))
         for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
             data_likelihood_gpu.node_sigma = sigma * torch.ones(data_likelihood.num_nodes, device=device)
             with torch.no_grad():
@@ -266,7 +267,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
             z = torch.normal(mean=0, std=1, size=data_likelihood_gpu.edge_pred.shape)
             score = data_likelihood_gpu.edge_pred.cpu()
             perturb =  - 0.5 * g ** 2 * eps * score
-            conf_dataset.apply_torsion_and_update_pos(data_likelihood, perturb.numpy())
+            conf_dataset_likelihood.apply_torsion_and_update_pos(data_likelihood, perturb.numpy())
             ## compute dlogp
             div = divergence(model, data_likelihood, data_likelihood_gpu, method='hutch' if likelihood is None else likelihood)
             logp += -0.5 * g ** 2 * eps * div
@@ -293,6 +294,8 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
        # vargrad_quotients = logit_pf - logit_pb - logrews
         #vargrad_loss = torch.var(vargrad_quotients)
         #print('vargrad loss', vargrad_loss)
+
+    
     
     return conformers
 
