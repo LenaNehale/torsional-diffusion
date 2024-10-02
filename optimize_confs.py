@@ -6,9 +6,9 @@ from rdkit.Chem import AllChem
 from utils.xtb import *
 
 parser = ArgumentParser()
-parser.add_argument('--in_confs', type=str, default='conformers_20steps_boltz_T1000.pkl', help='Pickle with input conformers')
+parser.add_argument('--in_confs', type=str, default='conformers_20steps_train_first_10smis.pkl', help='Pickle with input conformers')
 parser.add_argument('--skip', type=int, default=1, help='Frequency for running procedure')
-parser.add_argument('--out_confs', type=str,  default='conformers_20steps_optimized_boltz_T1000.pkl', help='Path to output pickle')
+parser.add_argument('--out_confs', type=str,  default='conformers_20steps_train_first_10smis_optimized.pkl', help='Path to output pickle')
 parser.add_argument('--mmff', action='store_true', default=True, help='Whether to optimize with MMFF')
 parser.add_argument('--level', type=str, default="normal", help='xTB optimization level')
 parser.add_argument('--xtb_energy', action='store_true', default=False, help='Whether to comput xTB energies')
