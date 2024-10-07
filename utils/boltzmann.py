@@ -32,11 +32,11 @@ class BoltzmannResampler:
             samples.append(data_new)
         
         print(f'smile {samples[0].canonical_smi}, Energy of initial conf{mmff_energy(samples[0].mol)}')
-        samples = perturb_seeds(samples)
+        samples = perturb_seeds(samples) # applies uniform noise to torsion angles
         # Get energies before sampling confs w diff model
         energies_noise = []
         for i, data_conf in enumerate(samples):
-            mol = pyg_to_mol(data.mol, data_conf, mmff=False, rmsd=False)
+            mol = pyg_to_mol(data.mol, data_conf, mmff=False, rmsd=False) # set the mol positions to data_conf positions
             energies_noise.append(mmff_energy(mol))
         energies_noise = np.array(energies_noise)
         print(f'Energies of noisy samples : mean {energies_noise.mean()} median {np.median(energies_noise)} std {energies_noise.std()}') 

@@ -16,9 +16,15 @@ def divergence(model, data, data_gpu, method):
     }[method](model, data, data_gpu)
 
 
-def mmff_energy(mol):
-    energy = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol, mmffVariant='MMFF94s')).CalcEnergy()
-    return energy
+def mmff_energy(mol, get_grad = False):
+    force_field =  AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol, mmffVariant='MMFF94s'))
+    energy = force_field.CalcEnergy()
+    grad = torch.Tensor(force_field.CalcGrad())
+    if get_grad:
+        return energy, grad
+    else:
+        return energy  
+
 
 
 def divergence_full(model, data, data_gpu, eps=0.01):

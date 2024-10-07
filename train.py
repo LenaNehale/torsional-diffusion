@@ -5,6 +5,7 @@ from rdkit import RDLogger
 from utils.dataset import construct_loader
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
+from gflownet.gfn_train import train_gfn_epoch
 from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
 from utils.boltzmann import BoltzmannResampler
 from argparse import Namespace
@@ -23,7 +24,8 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
     print("Starting training (not boltzmann)...")
     for epoch in range(args.n_epochs):
-        train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
+        #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
+        train_loss, base_train_loss = train_gfn_epoch(model, train_loader, optimizer, device)
         print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
 
         val_loss, base_val_loss = test_epoch(model, val_loader, device)

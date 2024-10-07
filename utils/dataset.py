@@ -60,15 +60,12 @@ class ConformerDataset(Dataset):
         self.boltzmann_resampler = boltzmann_resampler
 
         if cache: cache += "." + mode
-        self.cache = cache
-        '''
+        self.cache = cache     
         if cache and os.path.exists(cache):
             print('Reusing preprocessing from cache', cache)
             with open(cache, "rb") as f:
                 self.datapoints = pickle.load(f)
-        else:
-        '''
-        if True:
+        else:     
             print("Preprocessing")
             self.datapoints = self.preprocess_datapoints(root, split_path, pickle_dir, mode, num_workers, limit_molecules)
             if cache:
@@ -236,10 +233,9 @@ class ConformerDataset(Dataset):
     def resample_all(self, resampler, temperature=None):
         ess = []
         for data in tqdm.tqdm(self.datapoints):
-            #print('smile', data.canonical_smi)
-            #energy = mmff_energy(data.mol)
-            #print(f'Energy of ground gruth conf {energy}')
+            print('smile', data.canonical_smi)
             ess.append(resampler.resample(data, temperature=temperature))
+        
         return ess
 
 

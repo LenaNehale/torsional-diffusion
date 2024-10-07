@@ -24,7 +24,7 @@ RDLogger.DisableLog('rdApp.*')
 """
 
 
-def sample_and_get_loss(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20, batch_size=32,ode=False, likelihood=None, pdb=None, energy_fn='mmff', T = 32):
+def sample_and_get_loss(conformers, model, device, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20, batch_size=32,ode=False, likelihood=None, pdb=None, energy_fn='mmff', T = 32):
 
     conf_dataset = InferenceDataset(conformers)
     loader = DataLoader(conf_dataset, batch_size=batch_size, shuffle=False)
@@ -66,10 +66,10 @@ def sample_and_get_loss(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.
                 sigma_b = sigma_schedule[sigma_idx + 1]
                 g_b = sigma_b * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
                 std_b = g_b * np.sqrt(eps)
-                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std_b.cpu().numpy() ) 
+                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std_b.cpu().numpy()) 
                 logit_pb[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_backward)).sum() 
 
-            conf_dataset.apply_torsion_and_update_pos(data, perturb.numpy())
+            conf_dataset.apply_torsion_and_update_pos(data, perturb.detach().numpy())
             data_gpu.pos = data.pos.to(device)
 
             if pdb:
@@ -83,10 +83,11 @@ def sample_and_get_loss(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.
         
         logit_pf = reduce(logit_pf, 'bs steps-> bs', 'sum' )
         logit_pb = reduce(logit_pb, 'bs steps-> bs', 'sum' )
+        '''
         # Sanity check: compute exact likelihood of samples using the reverse ODE
         logp = torch.zeros(bs)
         data_likelihood = copy.deepcopy(data)
-        data_likelihood_gpu = copy.deepcopy(data_gpu)
+        data_likelihood_gpu = copy.deepcopy(data_gpu) 
         conf_dataset_likelihood = InferenceDataset(copy.deepcopy(conformers))
         for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
             data_likelihood_gpu.node_sigma = sigma * torch.ones(data_likelihood.num_nodes, device=device)
@@ -104,7 +105,7 @@ def sample_and_get_loss(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.
             data_likelihood_gpu.pos = data_likelihood.pos.to(device)
         
         print('Correlation(logit_pf - logit_pb,logp )', torch.corrcoef(torch.stack([logit_pf - logit_pb, logp]))[0,1])
-    
+        '''
     #Get VarGrad Loss
     try:
         #assert all(x == data.name[0] for x in data.name) 
@@ -115,7 +116,7 @@ def sample_and_get_loss(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.
     pos = rearrange(data.pos, '(bs n) d -> bs n d', bs=bs)
     z = rearrange(data.z, '(bs n) -> bs n', bs=bs)
     if energy_fn == 'mmff':
-        logrews = - torch.Tensor([mmff_energy(mol) for mol in data.mol])/T
+        logrews = - torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], conformers[i], mmff=True, rmsd=False)) for i in range(bs)])/T #previous: logrews = - torch.Tensor([mmff_energy(mol) for mol in data.mol])/T. This is wrong ! mol positions don't get updated during sampling
     else:
         raise ValueError("Energy function not implemented")       
     vargrad_quotients = logit_pf - logit_pb - logrews
@@ -125,21 +126,26 @@ def sample_and_get_loss(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.
     return conformers, vargrad_loss
 
 
-
-
-def train_epoch(model, loader, optimizer, device):
+def train_gfn_epoch(model, loader, optimizer, device):
     model.train()
     loss_tot = 0
     base_tot = 0
 
-    for data in tqdm(loader, total=len(loader)):
-        loss_to_backprop = 0
-        # form batches of K smiles
-        for conformers in data:
-            conformers, loss = sample_and_get_loss(data, model, device=device)
-
-
-        loss.backward() 
+    for batch in tqdm(loader, total=len(loader)): # Here, loader is used to go through smiles
+        batch = batch.to(device)
+        optimizer.zero_grad()
+        loss = []        
+        for i in range(len(batch)):
+            data = batch[i]
+            samples = []
+            for _ in range(16):
+                data_new = copy.deepcopy(data)
+                samples.append(data_new)   
+            samples = perturb_seeds(samples) # apply uniform noise to torsion angles   
+            conformers, loss_smile = sample_and_get_loss(samples, model, device=device) #on-policy
+            loss.append(loss_smile.item()) 
+        print('loss', loss)
+        torch.stack(loss).mean().backward() 
         optimizer.step()
         loss_tot += loss.item()
 
@@ -149,33 +155,6 @@ def train_epoch(model, loader, optimizer, device):
     print('train loss:', loss_avg)
     return loss_avg, base_avg
 
-
-@torch.no_grad()
-def test_epoch(model, loader, device):
-    model.eval()
-    loss_tot = 0
-    base_tot = 0
-
-    for data in tqdm(loader, total=len(loader)):
-
-        data = data.to(device)
-        data = model(data)
-        pred = data.edge_pred.cpu()
-
-        score = torus.score(
-            data.edge_rotate.cpu().numpy(),
-            data.edge_sigma.cpu().numpy())
-        score = torch.tensor(score)
-        score_norm = torus.score_norm(data.edge_sigma.cpu().numpy())
-        score_norm = torch.tensor(score_norm)
-        loss = ((score - pred) ** 2 / score_norm).mean()
-
-        loss_tot += loss.item()
-        base_tot += (score ** 2 / score_norm).mean().item()
-
-    loss_avg = loss_tot / len(loader)
-    base_avg = base_tot / len(loader)
-    return loss_avg, base_avg
 
 
 '''
