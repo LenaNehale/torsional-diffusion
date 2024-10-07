@@ -145,7 +145,7 @@ def train_gfn_epoch(model, loader, optimizer, device):
             conformers, loss_smile = sample_and_get_loss(samples, model, device=device) #on-policy
             loss.append(loss_smile.item()) 
         print('loss', loss)
-        torch.stack(loss).mean().backward() 
+        torch.stack(loss).mean().backward() #Not possible because grads are taken from a table & need to detach gradients :( )
         optimizer.step()
         loss_tot += loss.item()
 
