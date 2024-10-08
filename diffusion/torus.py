@@ -1,12 +1,18 @@
 import numpy as np
 import tqdm
 import os
-
+import torch
 
 def p(x, sigma, N=10):
     p_ = 0
     for i in tqdm.trange(-N, N + 1):
         p_ += np.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2)
+    return p_
+
+def p_differentiable(x, sigma, N=10):
+    p_ = 0
+    for i in range(-N, N + 1):
+        p_ += torch.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2)
     return p_
 
 

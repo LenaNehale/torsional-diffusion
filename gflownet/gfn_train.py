@@ -15,6 +15,8 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import diffusion.torus as torus
+import time
+
 
 RDLogger.DisableLog('rdApp.*')
 
@@ -40,8 +42,8 @@ def sample_and_get_loss(conformers, model, device, sigma_max=np.pi, sigma_min=0.
         data_gpu = copy.deepcopy(data).to(device)
         for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
             data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
-            with torch.no_grad():
-                data_gpu = model(data_gpu)
+            #with torch.no_grad():
+            data_gpu = model(data_gpu)
             g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
             z = torch.normal(mean=0, std=1, size=data_gpu.edge_pred.shape)
             score = data_gpu.edge_pred.cpu()
@@ -60,14 +62,14 @@ def sample_and_get_loss(conformers, model, device, sigma_max=np.pi, sigma_min=0.
             for i in range(bs):
                 start, end = i*n_torsion_angles, (i+1)*n_torsion_angles
                 # in forward, the new mean is obtained using the score (see above)
-                p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), std.cpu().numpy() ) 
-                logit_pf[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_forward)).sum() 
+                p_trajs_forward = torus.p_differentiable((perturb - mean)[start:end], std ) 
+                logit_pf[i,sigma_idx ] += torch.log(p_trajs_forward).sum() 
                 # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
                 sigma_b = sigma_schedule[sigma_idx + 1]
                 g_b = sigma_b * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
                 std_b = g_b * np.sqrt(eps)
-                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std_b.cpu().numpy()) 
-                logit_pb[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_backward)).sum() 
+                p_trajs_backward = torus.p_differentiable(  perturb[start:end] , std_b) 
+                logit_pb[i,sigma_idx ] += torch.log(p_trajs_backward).sum() 
 
             conf_dataset.apply_torsion_and_update_pos(data, perturb.detach().numpy())
             data_gpu.pos = data.pos.to(device)
@@ -91,8 +93,8 @@ def sample_and_get_loss(conformers, model, device, sigma_max=np.pi, sigma_min=0.
         conf_dataset_likelihood = InferenceDataset(copy.deepcopy(conformers))
         for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
             data_likelihood_gpu.node_sigma = sigma * torch.ones(data_likelihood.num_nodes, device=device)
-            with torch.no_grad():
-                data_likelihood_gpu = model(data_likelihood_gpu)
+            #with torch.no_grad():
+            data_likelihood_gpu = model(data_likelihood_gpu)
             ## apply reverse ODE perturbation
             g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
             z = torch.normal(mean=0, std=1, size=data_likelihood_gpu.edge_pred.shape)
@@ -136,18 +138,20 @@ def train_gfn_epoch(model, loader, optimizer, device):
         optimizer.zero_grad()
         loss = []        
         for i in range(len(batch)):
+            # print time that it takes 
             data = batch[i]
             samples = []
-            for _ in range(16):
+            for _ in range(2):
                 data_new = copy.deepcopy(data)
                 samples.append(data_new)   
-            samples = perturb_seeds(samples) # apply uniform noise to torsion angles   
+            samples = perturb_seeds(samples) # apply uniform noise to torsion angles  
             conformers, loss_smile = sample_and_get_loss(samples, model, device=device) #on-policy
-            loss.append(loss_smile.item()) 
-        print('loss', loss)
+            loss.append(loss_smile) 
+        print('loss', torch.stack(loss).mean())
         torch.stack(loss).mean().backward() #Not possible because grads are taken from a table & need to detach gradients :( )
         optimizer.step()
-        loss_tot += loss.item()
+        torch.cuda.empty_cache()
+        loss_tot += torch.Tensor(loss).mean().item()
 
 
     loss_avg = loss_tot / len(loader)
