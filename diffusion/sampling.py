@@ -178,15 +178,11 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
     loader = DataLoader(conf_dataset, batch_size=batch_size, shuffle=False)
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
     eps = 1 / steps
-    #energy = Energy(oracle='torchani')
     if pg_weight_log_0 is not None and pg_weight_log_1 is not None:
         dihedral, dih_iso = get_dihedrals(conformers,pg_weight_log_0, pg_weight_log_1, pg_invariant,mol )
     
     for batch_idx, data in enumerate(loader):
         bs = data.num_graphs
-        n_torsion_angles = len(data.total_perturb[0]) 
-        logit_pf = torch.zeros(bs, len(sigma_schedule))
-        logit_pb = torch.zeros(bs, len(sigma_schedule))
         dlogp = torch.zeros(bs)
         data_gpu = copy.deepcopy(data).to(device)
         for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
@@ -213,34 +209,10 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
                 langevin_weight = 10 ** (pg_langevin_weight_log_0 * t + pg_langevin_weight_log_1 * (1 - t)) if pg_langevin_weight_log_0 is not None and pg_langevin_weight_log_1 is not None else 1.0
                 perturb = (0.5 * g ** 2 * eps * score) + langevin_weight * (0.5 * g ** 2 * eps * score + g * np.sqrt(eps) * z)
                 perturb += pg_weight * (g ** 2 * eps * (score + pg_repulsive_weight * repulsive))         
-                mean, std = 0.5 * g ** 2 * eps * score + langevin_weight * (0.5 * g ** 2 * eps * score) +  pg_weight * (g ** 2 * eps * (score + pg_repulsive_weight * repulsive)) ,  langevin_weight * g * np.sqrt(eps)
-            else:
-                mean, std = g ** 2 * eps * score, g * np.sqrt(eps)
-            
-            # compute the forward and backward (in gflownet language) transitions logprobs
-            for i in range(bs):
-                start, end = i*n_torsion_angles, (i+1)*n_torsion_angles
-                # in forward, the new mean is obtained using the score (see above)
-                p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), std.cpu().numpy() ) 
-                logit_pf[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_forward)).sum() 
-                # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
-                sigma_b = sigma_schedule[sigma_idx + 1]
-                g_b = sigma_b * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
-                std_b = g_b * np.sqrt(eps)
-                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std_b.cpu().numpy() ) 
-                logit_pb[i,sigma_idx ] = torch.log(torch.tensor(p_trajs_backward)).sum() 
-            if sigma_idx == steps - 1:
-                p_trajs_forward = torus.p((perturb - mean)[start:end].cpu().numpy(), std.cpu().numpy() ) 
-                p_trajs_backward = torus.p(  perturb[start:end].cpu().numpy() , std.cpu().numpy() ) 
+
 
             conf_dataset.apply_torsion_and_update_pos(data, perturb.numpy())
             data_gpu.pos = data.pos.to(device)
-            #print('|perturb|', torch.abs(perturb).mean(), torch.abs(perturb).max(), torch.abs(perturb).min())
-            #print('|mean|', torch.abs(mean).mean(), torch.abs(mean).max(), torch.abs(mean).min())
-            #print('|perturb - mean|', torch.abs(perturb - mean).mean(), torch.abs(perturb - mean).max(), torch.abs(perturb - mean).min())
-
-
-            
 
             if pdb:
                 for conf_idx in range(bs):
@@ -250,52 +222,6 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
 
             for i, d in enumerate(dlogp):
                 conformers[data.idx[i]].dlogp = d.item()
-        
-        logit_pf = reduce(logit_pf, 'bs steps-> bs', 'sum' )
-        logit_pb = reduce(logit_pb, 'bs steps-> bs', 'sum' )
-        # Sanity check: compute exact likelihood of samples using the reverse ODE
-        logp = torch.zeros(bs)
-        data_likelihood = copy.deepcopy(data)
-        data_likelihood_gpu = copy.deepcopy(data_gpu)
-        conf_dataset_likelihood = InferenceDataset(copy.deepcopy(conformers))
-        for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
-            data_likelihood_gpu.node_sigma = sigma * torch.ones(data_likelihood.num_nodes, device=device)
-            with torch.no_grad():
-                data_likelihood_gpu = model(data_likelihood_gpu)
-            ## apply reverse ODE perturbation
-            g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
-            z = torch.normal(mean=0, std=1, size=data_likelihood_gpu.edge_pred.shape)
-            score = data_likelihood_gpu.edge_pred.cpu()
-            perturb =  - 0.5 * g ** 2 * eps * score
-            conf_dataset_likelihood.apply_torsion_and_update_pos(data_likelihood, perturb.numpy())
-            ## compute dlogp
-            div = divergence(model, data_likelihood, data_likelihood_gpu, method='hutch' if likelihood is None else likelihood)
-            logp += -0.5 * g ** 2 * eps * div
-            data_likelihood_gpu.pos = data_likelihood.pos.to(device)
-        
-        
-        #print('logit_pf - logit_pb', logit_pf - logit_pb)
-        #print('logp', logp)
-        print('Correlation(logit_pf - logit_pb,logp )', torch.corrcoef(torch.stack([logit_pf - logit_pb, logp]))[0,1])
-
-        #Computing logrews
-        pos = rearrange(data.pos, '(bs n) d -> bs n d', bs=bs)
-        z = rearrange(data.z, '(bs n) -> bs n', bs=bs)
-        #logrews = energy.logrew(z, pos)
-        #Computing vargradloss. 
-        '''
-        try:
-            #assert all(x == data.name[0] for x in data.name) 
-            assert all(x == data.canonical_smi[0] for x in data.canonical_smi)
-            
-        except:
-            raise ValueError("Vargrad loss should be computed for the same molecule only ! Otherwise we have different Zs, so doesn't make sense")
-        '''    
-       # vargrad_quotients = logit_pf - logit_pb - logrews
-        #vargrad_loss = torch.var(vargrad_quotients)
-        #print('vargrad loss', vargrad_loss)
-
-    
     
     return conformers
 

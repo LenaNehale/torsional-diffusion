@@ -26,11 +26,7 @@ class BoltzmannResampler:
         model.eval()
         data.pos = data.pos[0]
 
-        samples = []
-        for i in range(args.boltzmann_confs):
-            data_new = copy.deepcopy(data)
-            samples.append(data_new)
-        
+        samples = [copy.deepcopy(data) for _ in range(args.boltzmann_confs)]        
         print(f'smile {samples[0].canonical_smi}, Energy of initial conf{mmff_energy(samples[0].mol)}')
         samples = perturb_seeds(samples) # applies uniform noise to torsion angles
         # Get energies before sampling confs w diff model
@@ -40,10 +36,7 @@ class BoltzmannResampler:
             energies_noise.append(mmff_energy(mol))
         energies_noise = np.array(energies_noise)
         print(f'Energies of noisy samples : mean {energies_noise.mean()} median {np.median(energies_noise)} std {energies_noise.std()}') 
-        
-
-        #samples, loss = sample_and_get_loss(samples, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20, batch_size=32,ode=False, likelihood=None, pdb=None, energy_fn='mmff', T = 32)
-        
+                
         samples = sample(
             samples,
             model,
@@ -53,8 +46,6 @@ class BoltzmannResampler:
             sigma_min=args.sigma_min,
             likelihood=args.likelihood,
         )
-        
-        
 
         data.pos = []
         logweights = []

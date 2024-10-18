@@ -62,7 +62,7 @@ def modify_conformer(pos, edge_index, mask_rotate, torsion_updates, as_numpy=Fal
         u, v = e[0], e[1]
 
         # check if need to reverse the edge, v should be connected to the part that gets rotated
-        assert not mask_rotate[idx_edge, u]
+        assert not mask_rotate[idx_edge, u] or not mask_rotate[idx_edge, u.item()]
         assert mask_rotate[idx_edge, v]
 
         rot_vec = pos[u] - pos[v] # convention: positive rotation if pointing inwards. NOTE: DIFFERENT FROM THE PAPER!

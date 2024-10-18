@@ -258,7 +258,7 @@ def construct_loader(args, modes=('train', 'val'), boltzmann_resampler=None):
                                    boltzmann_resampler=boltzmann_resampler)
         loader = DataLoader(dataset=dataset,
                             batch_size=args.batch_size,
-                            shuffle=False if mode == 'test' else True)
+                            shuffle=False)
         loaders.append(loader)
 
     if len(loaders) == 1:
