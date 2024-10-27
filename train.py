@@ -26,9 +26,11 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
     for epoch in range(args.n_epochs):
         #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
         #print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
-        sigma_max, sigma_min,steps, T =np.pi, 0.01 * np.pi, 20, 1.0
-        conformers_train_gen, conformers_val_gen = log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=4, T=T,  max_batches=3)
-        train_loss, _, conformers = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 4, max_batches=100, T=T)
+        sigma_max, sigma_min,steps, T, num_points = np.pi, 0.01 * np.pi, 100, 1.0, 10
+        smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
+        conformers_train_gen, conformers_val_gen = log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=16, T=T,  max_batches=1, smi = smi, num_points=num_points)
+        for _ in range(16):
+            train_loss, _, conformers = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 8, max_batches=1, T=T, smi = smi)
         print("Epoch {}: Training Loss {}".format(epoch, train_loss))
         val_loss, base_val_loss = test_epoch(model, val_loader, device)
         print("Epoch {}: Validation Loss {} base loss {}".format(epoch, val_loss, base_val_loss))
@@ -100,8 +102,8 @@ if __name__ == '__main__':
     optimizer, scheduler = get_optimizer_and_scheduler(args, model)
 
     # record parameters
-    yaml_file_name = os.path.join(args.log_dir, 'model_parameters.yml')
-    save_yaml_file(yaml_file_name, args.__dict__)
+    #yaml_file_name = os.path.join(args.log_dir, 'model_parameters.yml')
+    #save_yaml_file(yaml_file_name, args.__dict__)
     args.device = device
 
     if args.boltzmann_training:

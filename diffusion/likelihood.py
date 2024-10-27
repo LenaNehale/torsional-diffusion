@@ -5,6 +5,7 @@ from scipy.stats import bootstrap
 
 from utils.torsion import perturb_batch
 from utils.xtb import *
+import copy
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -35,13 +36,14 @@ def divergence_full(model, data, data_gpu, eps=0.01):
         n_confs = 1
     n_bonds = score.shape[0] // n_confs
     div = 0
+    data_copy, data_gpu_copy =  copy.deepcopy(data), copy.deepcopy(data_gpu).to(device)
     for i in range(n_bonds):
         perturb = np.zeros_like(score)
         perturb[i::n_bonds] = eps
-        data_gpu.pos = perturb_batch(data, perturb).to(device)
+        data_gpu_copy.pos = perturb_batch(data_copy, perturb).to(device)
         with torch.no_grad():
-            data_gpu = model(data_gpu)
-        div += (data_gpu.edge_pred[i::n_bonds].cpu().numpy() - score[i::n_bonds]) / eps
+            data_gpu_copy = model(data_gpu_copy)
+        div += (data_gpu_copy.edge_pred[i::n_bonds].cpu().numpy() - score[i::n_bonds]) / eps
     return div
 
 

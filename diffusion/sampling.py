@@ -17,7 +17,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 still_frames = 10
 from diffusion import torus
 from einops import reduce, rearrange, repeat
-from gflownet.energy import Energy
 def try_mmff(mol):
     try:
         AllChem.MMFFOptimizeMoleculeConfs(mol, mmffVariant='MMFF94s')
@@ -229,7 +228,7 @@ def sample(conformers, model, sigma_max=np.pi, sigma_min=0.01 * np.pi, steps=20,
 
 
 def pyg_to_mol(mol, data, mmff=False, rmsd=True, copy=True):
-    if not mol.GetNumConformers():
+    if not mol.GetNumConformers(): 
         conformer = Chem.Conformer(mol.GetNumAtoms())
         mol.AddConformer(conformer)
     coords = data.pos

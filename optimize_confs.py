@@ -6,9 +6,8 @@ from rdkit.Chem import AllChem
 from utils.xtb import *
 
 parser = ArgumentParser()
-parser.add_argument('--in_confs', type=str, default='conformers_20steps_train_first_10smis.pkl', help='Pickle with input conformers')
+parser.add_argument('--in_confs', type=str, default='CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O', help='Pickle with input conformers')
 parser.add_argument('--skip', type=int, default=1, help='Frequency for running procedure')
-parser.add_argument('--out_confs', type=str,  default='conformers_20steps_train_first_10smis_optimized.pkl', help='Path to output pickle')
 parser.add_argument('--mmff', action='store_true', default=True, help='Whether to optimize with MMFF')
 parser.add_argument('--level', type=str, default="normal", help='xTB optimization level')
 parser.add_argument('--xtb_energy', action='store_true', default=False, help='Whether to comput xTB energies')
@@ -27,7 +26,7 @@ args = parser.parse_args()
 
 #test_data = test_data[::args.skip]
 
-mols = pickle.load(open(args.in_confs, 'rb'))
+mols = pickle.load(open(f'{args.in_confs}.pkl', 'rb'))
 test_data = mols.keys()
 print('Optimizing', len(test_data), 'mols')
 
@@ -50,7 +49,7 @@ for smi in tqdm.tqdm(test_data):
             conf.xtb_energy, conf.xtb_dipole, conf.xtb_gap, conf.xtb_runtime = res['energy'], res['dipole'], res['gap'], res['runtime']
         new_confs.append(conf)
     new_mols[smi] = new_confs
-open(args.out_confs, 'wb').write(pickle.dumps(new_mols))
+open(f'{args.in_confs}_optimized.pkl', 'wb').write(pickle.dumps(new_mols))
             
             
             

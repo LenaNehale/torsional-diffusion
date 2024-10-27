@@ -9,11 +9,12 @@ import os.path as osp
 
 from utils.utils import get_model
 from diffusion.sampling import *
+from gflownet.gfn_train import sample_and_get_loss
 
 parser = ArgumentParser()
-parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/drugs_default',  help='Path to folder with trained model and hyperparameters')
+parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T300',  help='Path to folder with trained model and hyperparameters')
 parser.add_argument('--ckpt', type=str, default='best_model.pt', help='Checkpoint to use inside the folder')
-parser.add_argument('--out', type=str, default = 'conformers_20steps_train_first_10smis.pkl', help='Path to the output pickle file')
+parser.add_argument('--out', type=str, default = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O', help='Path to the output pickle file')
 parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
 parser.add_argument('--pre_mmff', action='store_true', default=False, help='Whether to run MMFF on the local structure conformer')
 parser.add_argument('--post_mmff', action='store_true', default=False, help='Whether to run MMFF on the final generated structures')
@@ -45,6 +46,9 @@ parser.add_argument('--pg_langevin_weight_log_1', type=float, default=None)
 parser.add_argument('--pg_kernel_size_log_0', type=float, default=None)
 parser.add_argument('--pg_kernel_size_log_1', type=float, default=None)
 parser.add_argument('--pg_invariant', type=bool, default=False)
+
+#gfn stuff
+parser.add_argument('--gfn_sample', action='store_true', default=True, help='Whether to sample from the gfn fct')
 args = parser.parse_args()
 
 """
@@ -125,16 +129,19 @@ def sample_confs(raw_smi, n_confs, smi):
     
 
     if not args.no_model and n_rotable_bonds > 0.5:
-        conformers = sample(conformers, model, args.sigma_max, args.sigma_min, args.inference_steps,
-                            args.batch_size, args.ode, args.likelihood, pdb,
-                            pg_weight_log_0=args.pg_weight_log_0, pg_weight_log_1=args.pg_weight_log_1,
-                            pg_repulsive_weight_log_0=args.pg_repulsive_weight_log_0,
-                            pg_repulsive_weight_log_1=args.pg_repulsive_weight_log_1,
-                            pg_kernel_size_log_0=args.pg_kernel_size_log_0,
-                            pg_kernel_size_log_1=args.pg_kernel_size_log_1,
-                            pg_langevin_weight_log_0=args.pg_langevin_weight_log_0,
-                            pg_langevin_weight_log_1=args.pg_langevin_weight_log_1,
-                            pg_invariant=args.pg_invariant, mol=mol)
+        if args.gfn_sample == False:
+            conformers = sample(conformers, model, args.sigma_max, args.sigma_min, args.inference_steps,
+                                args.batch_size, args.ode, args.likelihood, pdb,
+                                pg_weight_log_0=args.pg_weight_log_0, pg_weight_log_1=args.pg_weight_log_1,
+                                pg_repulsive_weight_log_0=args.pg_repulsive_weight_log_0,
+                                pg_repulsive_weight_log_1=args.pg_repulsive_weight_log_1,
+                                pg_kernel_size_log_0=args.pg_kernel_size_log_0,
+                                pg_kernel_size_log_1=args.pg_kernel_size_log_1,
+                                pg_langevin_weight_log_0=args.pg_langevin_weight_log_0,
+                                pg_langevin_weight_log_1=args.pg_langevin_weight_log_1,
+                                pg_invariant=args.pg_invariant, mol=mol)
+        else: 
+            conformers, _ = sample_and_get_loss(conformers, model, device, args.sigma_min, args.sigma_max, args.inference_steps, train=False, T=1, energy_fn=None)
 
     if args.dump_pymol:
         if not osp.isdir(args.dump_pymol):
@@ -154,19 +161,11 @@ def sample_confs(raw_smi, n_confs, smi):
     return mols
 
 
+
+
 #for smi_idx, (raw_smi, n_confs, smi) in test_data:
-raw_smis = ['CCOC(=O)c1ccc(N2NC(=O)_C(=C_c3ccc([N+](=O)[O-])o3)C2=O)cc1',
- 'COc1cccc(C(C[N+](=O)[O-])c2c(C)[nH]n(-c3ccccc3)c2=O)c1',
- 'S=C(NCc1ccc2c(c1)OCO2)NC1CC1',
- 'CCN(CC)C(C(=O)NC1CCCCC1)c1ccc(C)cc1',
- 'Cc1nc(-c2nc(-c3c(C(=O)NNC(=O)Nc4ccccc4)noc3C)cs2)cs1',
- 'CCC1(C)Cc2c(C#N)c(N)n(N)c(=S)c2CO1',
- 'CC(C(=O)Nc1ccccc1F)N1CC[NH+](C)CC1',
- '[NH3+]CCCP(=O)(O)CCc1ccccc1',
- 'Cc1ccccc1NC(=O)c1ccc(NC(=O)C2CC(=O)OC23CCCCC3)cc1',
- 'O=C(Nc1ccccc1Oc1ccsc1C(=O)O)c1ccccc1']
-#n_confs = 64
-n_confs_list = np.array([14, 45, 24, 151, 50, 9, 7, 84, 42, 77])*2
+raw_smis = ['CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O']
+n_confs_list = np.array([32])
 #for smi_idx, (raw_smi, n_confs) in test_data:
 for smi_idx, (raw_smi, n_confs) in enumerate(zip(raw_smis, n_confs_list)):
     smi = raw_smi
@@ -203,6 +202,6 @@ for smi_idx, (raw_smi, n_confs) in enumerate(zip(raw_smis, n_confs_list)):
 
 # save to file
 if args.out:
-    with open(f'{args.out}', 'wb') as f:
+    with open(f'{args.out}_{len(raw_smis)}smiles.pkl', 'wb') as f:
         pickle.dump(conformer_dict, f)
 print('Generated conformers for', len(conformer_dict), 'molecules')
