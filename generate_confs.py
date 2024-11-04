@@ -14,7 +14,7 @@ from gflownet.gfn_train import sample_and_get_loss
 parser = ArgumentParser()
 parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T300',  help='Path to folder with trained model and hyperparameters')
 parser.add_argument('--ckpt', type=str, default='best_model.pt', help='Checkpoint to use inside the folder')
-parser.add_argument('--out', type=str, default = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O', help='Path to the output pickle file')
+parser.add_argument('--out', type=str, default = None, help='Path to the output pickle file')
 parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
 parser.add_argument('--pre_mmff', action='store_true', default=False, help='Whether to run MMFF on the local structure conformer')
 parser.add_argument('--post_mmff', action='store_true', default=False, help='Whether to run MMFF on the final generated structures')
@@ -48,7 +48,7 @@ parser.add_argument('--pg_kernel_size_log_1', type=float, default=None)
 parser.add_argument('--pg_invariant', type=bool, default=False)
 
 #gfn stuff
-parser.add_argument('--gfn_sample', action='store_true', default=True, help='Whether to sample from the gfn fct')
+parser.add_argument('--gfn_sample', action='store_true', default=False, help='Whether to sample from the gfn fct')
 args = parser.parse_args()
 
 """
@@ -164,7 +164,7 @@ def sample_confs(raw_smi, n_confs, smi):
 
 
 #for smi_idx, (raw_smi, n_confs, smi) in test_data:
-raw_smis = ['CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O']
+raw_smis = ['Brc1c(CSc2nncn2-c2ccccc2)nc2sccn12']
 n_confs_list = np.array([32])
 #for smi_idx, (raw_smi, n_confs) in test_data:
 for smi_idx, (raw_smi, n_confs) in enumerate(zip(raw_smis, n_confs_list)):
@@ -201,7 +201,6 @@ for smi_idx, (raw_smi, n_confs) in enumerate(zip(raw_smis, n_confs_list)):
         break
 
 # save to file
-if args.out:
-    with open(f'{args.out}_{len(raw_smis)}smiles.pkl', 'wb') as f:
-        pickle.dump(conformer_dict, f)
+with open(f'{raw_smis[0]}_{len(raw_smis)}smiles.pkl', 'wb') as f:
+    pickle.dump(conformer_dict, f)
 print('Generated conformers for', len(conformer_dict), 'molecules')

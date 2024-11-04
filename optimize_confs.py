@@ -26,7 +26,7 @@ args = parser.parse_args()
 
 #test_data = test_data[::args.skip]
 
-mols = pickle.load(open(f'{args.in_confs}.pkl', 'rb'))
+mols = pickle.load(open(f'{args.in_confs}_1smiles.pkl', 'rb'))
 test_data = mols.keys()
 print('Optimizing', len(test_data), 'mols')
 

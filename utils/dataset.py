@@ -27,7 +27,6 @@ class TorsionNoiseTransform(BaseTransform):
             #data.pos = random.choices(data.pos, data.weights, k=1)[0]
         #else:
             #data.pos = random.choice(data.pos)
-
         data.pos = data.pos[0] #chercher la conf avec la plus basse energie?
 
         try:

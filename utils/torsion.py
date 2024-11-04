@@ -54,8 +54,13 @@ def get_distance_matrix(pyg_data, mask_edges, mask_rotate):
     return edge_distances
 
 
-def modify_conformer(pos, edge_index, mask_rotate, torsion_updates, as_numpy=False):
+def modify_conformer(pos_input, edge_index, mask_rotate, torsion_updates_input, as_numpy=False):
+    pos = copy.deepcopy(pos_input)
     if type(pos) != np.ndarray: pos = pos.cpu().numpy()
+    if type(torsion_updates_input) != np.ndarray: 
+        torsion_updates = copy.deepcopy(torsion_updates_input.detach()).cpu().numpy()
+    else:
+        torsion_updates = torsion_updates_input
     for idx_edge, e in enumerate(edge_index.cpu().numpy()):
         if torsion_updates[idx_edge] == 0:
             continue
@@ -82,7 +87,7 @@ def perturb_batch(data, torsion_updates, split=False, return_updates=False):
             data.mask_rotate, torsion_updates)
     pos_new = [] if split else copy.deepcopy(data.pos)
     edges_of_interest = data.edge_index.T[data.edge_mask]
-    idx_node = 0
+    idx_node = 0 
     idx_edges = 0
     torsion_update_list = []
     for i, mask_rotate in enumerate(data.mask_rotate):

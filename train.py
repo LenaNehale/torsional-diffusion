@@ -26,12 +26,13 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
     for epoch in range(args.n_epochs):
         #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
         #print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
-        sigma_max, sigma_min,steps, T, num_points = np.pi, 0.01 * np.pi, 100, 1.0, 10
+        sigma_max, sigma_min,steps, T, num_points, logrew_clamp, energy_fn = np.pi, 0.01 * np.pi, 50, 1.0, 10, -1e3, 'dummy'
         smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
-        conformers_train_gen, conformers_val_gen = log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=16, T=T,  max_batches=1, smi = smi, num_points=num_points)
-        for _ in range(16):
-            train_loss, _, conformers = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 8, max_batches=1, T=T, smi = smi)
+        conformers_train_gen = log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=128, T=T,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn)
+        for _ in range(32):
+            train_loss, _, conformers,_,_,_, _  = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 8, max_batches=1, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn)
         print("Epoch {}: Training Loss {}".format(epoch, train_loss))
+    '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device)
         print("Epoch {}: Validation Loss {} base loss {}".format(epoch, val_loss, base_val_loss))
 
@@ -46,6 +47,7 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
         #torch.save({'epoch': epoch,'model': model.state_dict(),'optimizer': optimizer.state_dict(),'scheduler': scheduler.state_dict(),}, os.path.join(args.log_dir, 'last_model.pt'))
 
     print("Best Validation Loss {} on Epoch {}".format(best_val_loss, best_epoch))
+    '''
 
 
 def boltzmann_train(args, model, optimizer, train_loader, val_loader, resampler):
