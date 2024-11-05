@@ -112,7 +112,7 @@ def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device,
     return energy_landscape, logpTs
 
 
-def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  steps,ode=False,likelihood=True,energy_fn="mmff",T=1.0, add_gradE=False, w_grad=0.1,train=True, logrew_clamp = -1e-3):
+def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  steps,ode=False,likelihood=True,energy_fn="mmff",T=1.0, add_gradE=False, w_grad=0.1,train=True, logrew_clamp = -1e3):
     '''
     Sample conformers and compute the vargrad loss.
 
@@ -190,7 +190,7 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
             start, end = i * n_torsion_angles, (i + 1) * n_torsion_angles
             # in forward, the new mean is obtained using the score (see above)
             p_trajs_forward = torus.p_differentiable(
-                (perturb - mean)[start:end], std
+                (perturb - mean.detach())[start:end], std
             )
             logit_pf[i, sigma_idx] += torch.log(p_trajs_forward).sum()
             # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
@@ -199,7 +199,7 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
                 torch.tensor(2 * np.log(sigma_max / sigma_min))
             )
             std_b = g_b * np.sqrt(eps)
-            p_trajs_backward = torus.p_differentiable(perturb[start:end], std_b)
+            p_trajs_backward = torus.p_differentiable(perturb[start:end].detach(), std_b)
             logit_pb[i, sigma_idx] += torch.log(p_trajs_backward).sum()
 
         new_pos =  perturb_batch(data, perturb)
@@ -241,13 +241,104 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
     vargrad_quotients = logit_pf - logit_pb - logrews/T
     vargrad_loss = torch.var(vargrad_quotients)   
     print('loss vargrad:', vargrad_loss)
- 
+    #if train : 
+        #gradients = torch.autograd.grad(logit_pf.sum(), model.parameters(), retain_graph=True)
+        #print(gradients)
 
     return data.to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews, perturbs_traj
 
 
+def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device):
+    data = Batch.from_data_list(conformers_input)
+    data_gpu = copy.deepcopy(data).to(device)
+    data.total_perturb = torch.zeros(len(data)* data.mask_rotate[0].shape[0])
+    bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
+    sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1 )
+    eps = 1 / steps
+    print('energies before sampling', [mmff_energy(pyg_to_mol(data.mol[i], data[i] )) for i in range(bs) ])  
+    traj = [copy.deepcopy(data)]
+    for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
+        with torch.no_grad() if not train else contextlib.nullcontext():
+            data_gpu = model(data_gpu)
+        g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        z = torch.normal(mean=0, std=1, size=data_gpu.edge_pred.shape)
+        score = data_gpu.edge_pred.cpu()        
+        perturb = g**2 * eps * score + g * np.sqrt(eps) * z
+        new_pos = perturb_batch(data, perturb) 
+        data.pos = new_pos 
+        data_gpu.pos = data.pos.to(device)
+        data_gpu.total_perturb = data.total_perturb.to(device)
+        data.total_perturb = data.total_perturb + perturb.detach() # the plus sign is because we are going forwards
+        traj.append(copy.deepcopy(data))   
+    return traj
 
-def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
+def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=True, loss='vargrad', logrew_clamp = -1e3):
+    logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=likelihood, train=False)
+    data = traj[-1]
+    bs = len(data)
+    try:
+        #assert all(x == data.name[0] for x in data.name)
+        assert all( data[i].canonical_smi == data[0].canonical_smi for i in range(len(data)))
+    except:
+        raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
+    # Computing logrews
+    if energy_fn == "mmff":
+        logrews = (-torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])/ T)
+        print('energies after sampling', [mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs) ])
+    elif energy_fn == 'dummy':
+        total_perturb = traj[-1].total_perturb - traj[0].total_perturb
+        logrews = - 20*( 3 +  torch.cos(total_perturb.reshape(bs, -1)[:,0]*3) + torch.sin(total_perturb.reshape(bs, -1)[:,1]*3) )  
+    else:
+        raise  NotImplementedError(f"WARNING: Energy function {energy_fn} not implemented!")
+    # logrews clamping. Mandatory, otherwise we get crazy values for variance
+    logrews[logrews<logrew_clamp] = logrew_clamp
+    # Create the C matrix
+    X = logit_pf - logit_pb.detach() - logrews/T
+    C = X.unsqueeze(1) - X.unsqueeze(0)
+    # Compute the gradloss 
+    sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
+    eps = 1 / steps
+    n_torsion_angles = len( traj[-1][0].total_perturb) 
+    grad = None
+    for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
+        data = traj[sigma_idx]
+        data_gpu = copy.deepcopy(data).to(device)
+        #print(f'energies at time {sigma_idx}', [mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs) ])      
+        data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
+        with torch.no_grad() if not train else contextlib.nullcontext():
+            data_gpu = model(data_gpu)
+        g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        score = data_gpu.edge_pred.cpu()       
+        mean, std = g**2 * eps * score, g * np.sqrt(eps)
+        perturb = traj[sigma_idx +1 ].total_perturb - traj[sigma_idx].total_perturb
+        # compute the forward and backward (in gflownet language) transitions logprobs
+        logit_pf = torch.zeros(bs)
+        logit_pb = torch.zeros(bs)  
+        for i in range(bs):
+            start, end = i * n_torsion_angles, (i + 1) * n_torsion_angles
+            # in forward, the new mean is obtained using the score (see above)
+            p_trajs_forward = torus.p_differentiable( (perturb - mean.detach())[start:end], std)
+            logit_pf[i] += torch.log(p_trajs_forward).sum()
+            # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
+            sigma_b = sigma_schedule[sigma_idx + 1]
+            g_b = sigma_b * torch.sqrt( torch.tensor(2 * np.log(sigma_max / sigma_min)))
+            std_b = g_b * np.sqrt(eps)
+            p_trajs_backward = torus.p_differentiable(perturb[start:end].detach(), std_b)
+            logit_pb[i] += torch.log(p_trajs_backward).sum()
+
+        # Get gradient of logit_pf with respect to parameters
+        grad_f = torch.autograd.grad((C.sum(axis = 1) * logit_pf).mean(), model.parameters(), create_graph=True)
+        grad_b = torch.autograd.grad((C.sum(axis = 1) * logit_pb).mean(), model.parameters(), create_graph=True)
+        grad = 2*(grad_f - grad_b) if grad is not None else grad + 2*(grad_f - grad_b)
+        #Remove logit_pf, logit_pb from the computation graph
+        logit_pf = logit_pf.detach()
+        logit_pb = logit_pb.detach()
+        torch.cuda.empty_cache()
+    return grad
+
+
+
+def sample_backward_trajs(conformers_input, model, sigma_min, sigma_max,  steps):
     data = Batch.from_data_list(conformers_input)
     data.total_perturb = torch.zeros(len(data)* data.mask_rotate[0].shape[0])
     bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
@@ -267,7 +358,6 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
     #reverse traj
     traj = traj[::-1]
     return traj
-
 
 def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=True):
     print('smi:', traj[-1][0].canonical_smi)
@@ -293,16 +383,15 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
         for i in range(bs):
             start, end = i * n_torsion_angles, (i + 1) * n_torsion_angles
             # in forward, the new mean is obtained using the score (see above)
-            p_trajs_forward = torus.p_differentiable( (perturb - mean)[start:end], std)
+            p_trajs_forward = torus.p_differentiable( (perturb - mean.detach())[start:end], std)
             logit_pf[i, sigma_idx] += torch.log(p_trajs_forward).sum()
             # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
             sigma_b = sigma_schedule[sigma_idx + 1]
             g_b = sigma_b * torch.sqrt( torch.tensor(2 * np.log(sigma_max / sigma_min)))
             std_b = g_b * np.sqrt(eps)
-            p_trajs_backward = torus.p_differentiable(perturb[start:end], std_b)
+            p_trajs_backward = torus.p_differentiable(perturb[start:end].detach(), std_b)
             logit_pb[i, sigma_idx] += torch.log(p_trajs_backward).sum()
         
-        #Grad accumulation trick
     logit_pf = reduce(logit_pf, "bs steps-> bs", "sum")
     logit_pb = reduce(logit_pb, "bs steps-> bs", "sum")
     
@@ -346,9 +435,9 @@ def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False
 # replaybuffer = ReplayBuffer(max_size = 10000)
 
 
-def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, n_trajs = 8, max_batches = None, smi = None, logrew_clamp = -1e-3, energy_fn = None):
+def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, n_trajs = 8, max_batches = None, smi = None, logrew_clamp = -1e3, energy_fn = None):
     if train:
-        model.train()
+        model.train() # set model to training mode
     loss_tot = 0
     conformers_noise = []
     conformers = []
@@ -382,6 +471,7 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
             print('energies after noising', [mmff_energy(pyg_to_mol(data.mol[i], samples[i].to('cpu'))) for i in range(len(samples)) ])
             conformers_noise.append(samples)
             #traj = sample_backward_trajs(samples, sigma_min, sigma_max,  steps) # off-policy
+            traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device) # on-policy
             #loss = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=False, loss='vargrad', logrew_clamp = -1e3)
             confs, loss_smile, logit_pf, logit_pb, logrew, perturbs_traj = sample_and_get_loss(
                 samples, model, device, sigma_min=sigma_min, sigma_max=sigma_max,  steps=steps,train=train, T=T, logrew_clamp= logrew_clamp, energy_fn= energy_fn)  # on-policy
@@ -412,7 +502,7 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
     return loss_tot, conformers_noise, conformers, logit_pfs, logit_pbs, logrews, perturbs_trajs
 
 
-def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = 100, logrew_clamp = -1e-3, energy_fn = None):
+def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = 100, logrew_clamp = -1e3, energy_fn = None):
 
     # Log vargrad loss on the replay buffer/training set/val set
     train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs_trajs = gfn_epoch(
