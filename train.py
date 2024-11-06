@@ -26,7 +26,7 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
     for epoch in range(args.n_epochs):
         #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
         #print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
-        sigma_max, sigma_min,steps, T, num_points, logrew_clamp, energy_fn = np.pi, 0.01 * np.pi, 50, 1.0, 50, -1e3, 'dummy'
+        sigma_max, sigma_min,steps, T, num_points, logrew_clamp, energy_fn = np.pi, 0.01 * np.pi, 50, 1.0, 10, -1e3, 'dummy'
         smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
         conformers_train_gen = log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=128, T=T,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn)
         for _ in range(32):
