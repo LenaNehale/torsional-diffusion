@@ -42,6 +42,7 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
     Returns:
     - logp: log-likelihood of conformers under the model
     '''
+
     
     sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)
     eps = 1 / steps
@@ -51,6 +52,7 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
     data.total_perturb = torch.zeros(bs * n_torsion_angles)
     data_gpu = copy.deepcopy(data).to(device)
     mols = [[pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))]] # viz molecules trajs during denoising
+    traj = [copy.deepcopy(data)]
     for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
         data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
         with torch.no_grad():
@@ -58,18 +60,19 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
         ## apply reverse ODE perturbation
         g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
         score = data_gpu.edge_pred.cpu()
-        perturb =  - 0.5 * g ** 2 * eps * score
+        perturb =  - 0.5 * g ** 2 * eps * score # minus is because we are going backwards
         new_pos = perturb_batch(data, perturb)
         data.pos = new_pos
-        data.total_perturb -= perturb # minus is because we are going backwards
+        data.total_perturb += perturb 
         mols.append([pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))])
         #data = copy.deepcopy(conf_dataset_likelihood.data) 
         data_gpu.pos =  data.pos.to(device) # has 2 more attributes than data: edge_pred and edge_sigma
-        div = divergence(model, data, data_gpu, method='hutch') 
+        div = divergence(model, data, data_gpu, method='full') 
         logp += -0.5 * g ** 2 * eps * div
         data_gpu.pos = data.pos.to(device)
+        traj.append(copy.deepcopy(data))
     pickle.dump(mols, open("mols_ode_backwards.pkl", "wb"))
-    return logp
+    return logp, traj
 
 
 def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device, num_points=10, ix0=0, ix1=1, energy_fn = None ):
@@ -107,7 +110,11 @@ def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device,
                 energy_landscape[-1].append(mmff_energy(mol))
             elif energy_fn == 'dummy':
                 energy_landscape[-1].append( - 20*( 3 +  torch.cos(theta0*3) + torch.sin(theta1*3) ))
-        logpT = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device).tolist()
+        logpT, trajs_ode = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device)
+        logpT = logpT.tolist()
+        #logpT0, trajs_ode0 = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device)
+        #logpT0 = logpT0.tolist()
+        #assert torch.abs(torch.Tensor(logpT) -  torch.Tensor(logpT0)).max() == 0
         logpTs.append(logpT)
     return energy_landscape, logpTs
 
@@ -151,7 +158,6 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
     logit_pb = torch.zeros(bs, len(sigma_schedule))
     dlogp = torch.zeros(bs)
     data_gpu = copy.deepcopy(data).to(device)
-    perturbs_traj = []
     
     for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
         data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
@@ -164,7 +170,7 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
             perturb = 0.5 * g**2 * eps * score
             if likelihood:
                 div = divergence(
-                    model, data, data_gpu, method=likelihood
+                    model, data, data_gpu, method='full'
                 ) 
                 dlogp += -0.5 * g**2 * eps * div
         else:
@@ -182,8 +188,6 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
                 energy, grad = mmff_energy(mol, get_grad=True)
                 grads.append(grad)
             grads = torch.stack(grads)
-        
-        perturbs_traj.append(perturb.detach())
         # compute the forward and backward (in gflownet language) transitions logprobs
         mean, std = g**2 * eps * score, g * np.sqrt(eps)
         for i in range(bs):
@@ -213,7 +217,7 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
     logit_pf = reduce(logit_pf, "bs steps-> bs", "sum")
     logit_pb = reduce(logit_pb, "bs steps-> bs", "sum")
     if likelihood:
-        logp = get_logpT(data.to_data_list(), model, sigma_min, sigma_max,  steps)
+        logp, trajs_ode = get_logpT(data.to_data_list(), model, sigma_min, sigma_max,  steps)
         print('Correlation(logit_pf - logit_pb,logp )', torch.corrcoef(torch.stack([logit_pf - logit_pb, logp]))[0,1])
     
     # Get VarGrad Loss
@@ -245,7 +249,7 @@ def sample_and_get_loss(conformers_input,model,device,sigma_min, sigma_max,  ste
         #gradients = torch.autograd.grad(logit_pf.sum(), model.parameters(), retain_graph=True)
         #print(gradients)
 
-    return data.to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews, perturbs_traj
+    return data.to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews, data.total_perturb.detach()
 
 
 def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device):
@@ -351,9 +355,9 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
         g = sigma_b * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
         z = torch.normal(mean=0, std=1, size=[n_torsion_angles *  len(data.mol)])
         perturb = g * np.sqrt(eps) * z  
-        new_pos = perturb_batch(data, perturb) 
+        new_pos = perturb_batch(data, perturb)  # the minus sign is because we are going backwards
         data.pos = new_pos 
-        data.total_perturb = data.total_perturb - perturb.detach() # the minus sign is because we are going backwards
+        data.total_perturb = data.total_perturb + perturb.detach() 
         traj.append(copy.deepcopy(data))   
     #reverse traj
     traj = traj[::-1]
@@ -396,7 +400,7 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
     logit_pb = reduce(logit_pb, "bs steps-> bs", "sum")
     
     if likelihood:
-        logp = get_logpT(traj[-1].to_data_list(), model, sigma_min, sigma_max,  steps)
+        logp, trajs_ode = get_logpT(traj[-1].to_data_list(), model, sigma_min, sigma_max,  steps)
         print('Correlation(logit_pf - logit_pb,logp )', torch.corrcoef(torch.stack([logit_pf - logit_pb, logp]))[0,1])
     else:
         logp = None
@@ -426,7 +430,7 @@ def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False
         logrews[logrews<logrew_clamp] = logrew_clamp
         vargrad_quotients = logit_pf - logit_pb - logrews/T
         vargrad_loss = torch.var(vargrad_quotients)
-        return traj[-1].to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews, None
+        return traj[-1].to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews
     
     else:
         raise NotImplementedError(f"WARNING: Loss function {loss} not implemented!")
@@ -435,7 +439,7 @@ def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False
 # replaybuffer = ReplayBuffer(max_size = 10000)
 
 
-def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, n_trajs = 8, max_batches = None, smi = None, logrew_clamp = -1e3, energy_fn = None):
+def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, n_trajs = 8, max_batches = None, smi = None, logrew_clamp = -1e3, energy_fn = None, train_mode = None, ix0=None, ix1=None, num_points = None):
     if train:
         model.train() # set model to training mode
     loss_tot = 0
@@ -444,7 +448,7 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
     logit_pfs = []
     logit_pbs = []
     logrews = []
-    perturbs_trajs = []
+    total_perturbs = []
     max_batches = len(loader) if max_batches is None else max_batches
 
 
@@ -456,69 +460,88 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
             #break
     if batch_idx == len(loader):
         raise ValueError(f"Smile {smi} not found in the dataset")
-    if True:
-        batch = batch.to(device)
-        optimizer.zero_grad()
-        loss_batch = 0  # list of per-smile vargrad loss
-        for i in range(len(batch)):
-            data = batch[i]
-            samples = [copy.deepcopy(data) for _ in range(n_trajs)]
-            print('smi:', [samples[0].canonical_smi])
-            data = Batch.from_data_list(samples)
-            #print('energies before noising', [mmff_energy(pyg_to_mol(data.mol[i], data[i].to('cpu'))) for i in range(len(samples)) ]) 
-            samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
-            data = Batch.from_data_list(samples)
-            #print('energies after noising', [mmff_energy(pyg_to_mol(data.mol[i], samples[i].to('cpu'))) for i in range(len(samples)) ])
-            conformers_noise.append(samples)
-            #traj = sample_backward_trajs(samples, sigma_min, sigma_max,  steps) # off-policy
-            #traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device) # on-policy
-            #confs, loss_smile, logit_pf, logit_pb, logrew, perturbs_traj = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
-            confs, loss_smile, logit_pf, logit_pb, logrew, perturbs_traj = sample_and_get_loss(samples, model, device, sigma_min=sigma_min, sigma_max=sigma_max,  steps=steps,train=train, T=T, logrew_clamp= logrew_clamp, energy_fn= energy_fn)  # on-policy
-            conformers.append(confs)
-            if train == False:
-                logit_pfs.append(logit_pf.detach())
-                logit_pbs.append(logit_pb)
-                logrews.append(logrew)
-                perturbs_trajs.append(perturbs_traj)
-            loss_smile = loss_smile / len(batch)
-            if train:
-                loss_smile.backward()
-            loss_batch += loss_smile.item()
-            #print(f'Available Memory: {torch.cuda.get_device_properties(device).total_memory / 1024**2:.2f} MB')
-            #print(f"Memory Allocated: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MB")
-            #print(f"Memory Reserved: {torch.cuda.memory_reserved(device) / 1024**2:.2f} MB")
-            torch.cuda.empty_cache()
-        if train:
-            if  use_wandb:
-                wandb.log({"loss": loss_batch})
-            optimizer.step()
-        loss_tot += loss_batch
-        del loss_batch
-        torch.cuda.empty_cache()
+    batch = batch.to(device)
+    optimizer.zero_grad()
+    loss_batch = 0  # list of per-smile vargrad loss
+    if train_mode == 'on_policy':
+        data = batch[0] # only consider one smile for now
+        samples = [copy.deepcopy(data) for _ in range(n_trajs)]
+        print('smi:', [samples[0].canonical_smi])
+        data = Batch.from_data_list(samples)
+        #print('energies before noising', [mmff_energy(pyg_to_mol(data.mol[i], data[i].to('cpu'))) for i in range(len(samples)) ]) 
+        samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
+        data = Batch.from_data_list(samples)
+        #print('energies after noising', [mmff_energy(pyg_to_mol(data.mol[i], samples[i].to('cpu'))) for i in range(len(samples)) ])
+        conformers_noise.append(samples)
+        #traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device) # on-policy
+        #confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
+        confs, loss_smile, logit_pf, logit_pb, logrew, total_perturb = sample_and_get_loss(samples, model, device, sigma_min=sigma_min, sigma_max=sigma_max,  steps=steps,train=train, T=T, logrew_clamp= logrew_clamp, energy_fn= energy_fn)  # on-policy
+        total_perturbs.append(total_perturb)
+    elif train_mode == 'off_policy': 
+        data = batch[0]
+        torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points )
+        # Sample randomly a subset of torsion angles in torsion_angles_linspace
+        if train: 
+            thetas0, thetas1 = np.random.choice(torsion_angles_linspace, 3, replace=False), np.random.choice(torsion_angles_linspace, 3, replace=False)
+        else:
+            thetas0, thetas1 = torsion_angles_linspace, torsion_angles_linspace
+        samples = []
+        for theta0 in thetas0:
+            for theta1 in thetas1:
+                data0 = copy.deepcopy(data)
+                torsion_update = np.zeros(len(data0.mask_rotate))
+                torsion_update[ix0], torsion_update[ix1] = theta0, theta1
+                print(torsion_update, theta0, theta1)
+                new_pos = modify_conformer(data0.pos, data0.edge_index.T[data0.edge_mask], data0.mask_rotate, torsion_update, as_numpy=False) 
+                data0.pos = new_pos
+                data0.total_perturb = torch.zeros(len(data0.mask_rotate))
+                samples.append(data0)
+        traj = sample_backward_trajs(samples, sigma_min, sigma_max,  steps)
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
+        total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb ) 
+    
+    conformers.append(confs)
+    logit_pfs.append(logit_pf.detach())
+    logit_pbs.append(logit_pb)
+    logrews.append(logrew)
+    loss_smile = loss_smile / len(batch)
+    if train:
+        loss_smile.backward()
+    loss_batch += loss_smile.item()
+    #print(f'Available Memory: {torch.cuda.get_device_properties(device).total_memory / 1024**2:.2f} MB')
+    #print(f"Memory Allocated: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MB")
+    #print(f"Memory Reserved: {torch.cuda.memory_reserved(device) / 1024**2:.2f} MB")
+    torch.cuda.empty_cache()
+    if train:
+        if  use_wandb:
+            wandb.log({"loss": loss_batch})
+        optimizer.step()
+    loss_tot += loss_batch
+    del loss_batch
+    torch.cuda.empty_cache()
     if smi is None:
         loss_tot = loss_tot / len(loader)
 
-    return loss_tot, conformers_noise, conformers, logit_pfs, logit_pbs, logrews, perturbs_trajs
+    return loss_tot, conformers_noise, conformers, logit_pfs, logit_pbs, logrews, total_perturbs
 
 
-def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = 100, logrew_clamp = -1e3, energy_fn = None):
+def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = None, logrew_clamp = -1e3, energy_fn = None, train_mode = None, ix0=None, ix1=None):
 
     # Log vargrad loss on the replay buffer/training set/val set
-    train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs_trajs = gfn_epoch(
-        model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, n_trajs = n_trajs, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn
+    train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs = gfn_epoch(
+        model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, n_trajs = n_trajs, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode=train_mode, num_points = num_points
     )
     if use_wandb:
         wandb.log({"train_loss": train_loss})
 
-    # Log perturbs_trajs
 
     # Log energies/logpT metrics
     energies_train_on_policy = get_energies(conformers_train_gen)
     energies_train_rand = get_energies(conformers_train_noise)   
-    logpT_train_on_policy = [get_logpT(confs, model, sigma_min, sigma_max,  steps) for confs in conformers_train_gen]
-    logpT_train_rand = [get_logpT( confs , model, sigma_min, sigma_max,  steps) for confs in conformers_train_noise]
+    #logpT_train_on_policy = [get_logpT(confs, model, sigma_min, sigma_max,  steps) for confs in conformers_train_gen]
+    #logpT_train_rand = [get_logpT( confs , model, sigma_min, sigma_max,  steps) for confs in conformers_train_noise]
 
-
+    '''
     # log 2 histograms of energies/logpTs
     print('energies_train_on_policy', list(energies_train_on_policy.values())[0])
     if use_wandb:
@@ -529,7 +552,7 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
         wandb.log({  "logpTs_train_rand": wandb.Histogram(logpT_train_rand[0].numpy(), num_bins = 10),
         "logpTs_train_on_policy": wandb.Histogram(logpT_train_on_policy[0].numpy(), num_bins = 10)
         })
-        
+    '''   
 
 
     # Plot the heatmap of learned logpts on wandb
@@ -540,15 +563,13 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
                 break 
         data = batch[0]
         
-        ix0, ix1 = 0, 1
-        energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=0, ix1=1, energy_fn = energy_fn)
+        energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn)
+        energy_landscape0, logpTs0= get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn)
+        assert energy_landscape0 == energy_landscape
+        assert np.abs(np.array(logpTs0)  - np.array(logpTs)).mean() / np.abs(logpTs0).mean() < 1e-2
         energy_landscape, logpTs = np.array(energy_landscape), np.array(logpTs)
         plt.figure()
-        plt.imshow(energy_landscape, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
-        total_perturbs = torch.stack([x.total_perturb for l in conformers_train_gen for x in l ]) # shape bs, 1, num_torsion_angles
-        # choose the corresponsing torsion angles
-        theta0, theta1 = total_perturbs[:,ix0]%(2*np.pi) , total_perturbs[:,ix1]%(2*np.pi)
-        plt.scatter(theta0, theta1, c='r', s=5)
+        plt.imshow(energy_landscape, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(energy_landscape), vmax=np.max(energy_landscape))
         plt.colorbar(label='Energy')
         plt.xlabel('Theta0')
         plt.ylabel('Theta1')
@@ -565,9 +586,25 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
         plt.savefig("logpTs.png")
         plt.close()
 
+        plt.figure()
+        # choose the corresponsing torsion angles
+        num_torsion_angles = len(data.mask_rotate)
+        perturbs = perturbs[0].reshape(-1, num_torsion_angles)
+        theta0, theta1 = perturbs[:,ix0]%(2*np.pi) , perturbs[:,ix1]%(2*np.pi)
+        plt.xlim(0, 2*np.pi)
+        plt.ylim(0, 2*np.pi)
+        plt.scatter(theta0, theta1, c='r', s=5)
+        plt.xlabel('Theta0')
+        plt.ylabel('Theta1')
+        plt.title('Samples')
+        plt.savefig("samples.png")
+        plt.close()
+        
+
         if use_wandb:
             wandb.log({"energy_landscape":  wandb.Image("energy_landscape.png")})
             wandb.log({"logpts": wandb.Image("logpTs.png")})
+            wandb.log({"samples": wandb.Image("samples.png")})
 
         #Plot the evolution of the lower bound over logZ
         logZ_hat = (torch.stack(logit_pbs) + torch.stack(logrews) - torch.stack(logit_pfs)) 

@@ -48,6 +48,29 @@ class TorsionNoiseTransform(BaseTransform):
                 f'sigma_max={self.sigma_max})')
 
 
+class NoTransform(BaseTransform):
+    def __init__(self, sigma_min=0.01 * np.pi, sigma_max=np.pi, boltzmann_weight=False):
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.boltzmann_weight = boltzmann_weight
+
+    def __call__(self, data):
+        # select conformer
+        data.pos = data.pos[0] #chercher la conf avec la plus basse energie?
+
+        try:
+            edge_mask, mask_rotate = data.edge_mask, data.mask_rotate
+        except:
+            edge_mask, mask_rotate = data.mask_edges, data.mask_rotate
+            data.edge_mask = torch.tensor(data.mask_edges)
+
+        data.node_sigma = None
+
+        return data
+
+    def __repr__(self) -> str:
+        return (f'{self.__class__.__name__}(no_transform)')
+
 class ConformerDataset(Dataset):
     def __init__(self, root, split_path, mode, types, dataset, transform=None, num_workers=1, limit_molecules=None,
                  cache=None, pickle_dir=None, boltzmann_resampler=None):
@@ -245,8 +268,8 @@ def construct_loader(args, modes=('train', 'val'), boltzmann_resampler=None):
         modes = [modes]
 
     loaders = []
-    transform = TorsionNoiseTransform(sigma_min=args.sigma_min, sigma_max=args.sigma_max,
-                                      boltzmann_weight=args.boltzmann_weight)
+    #transform = TorsionNoiseTransform(sigma_min=args.sigma_min, sigma_max=args.sigma_max,boltzmann_weight=args.boltzmann_weight)
+    transform = NoTransform(sigma_min=args.sigma_min, sigma_max=args.sigma_max,boltzmann_weight=args.boltzmann_weight)
     types = qm9_types if args.dataset == 'qm9' else drugs_types
 
     for mode in modes:
