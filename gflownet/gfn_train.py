@@ -142,6 +142,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
     #print('energies before sampling', [mmff_energy(pyg_to_mol(data.mol[i], data[i] )) for i in range(bs) ])  
     traj = [copy.deepcopy(data)]
     for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
+        data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
         with torch.no_grad() if not train else contextlib.nullcontext():
             data_gpu = model(data_gpu)
         g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
@@ -155,8 +156,6 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         data.total_perturb = data.total_perturb + perturb.detach() 
         traj.append(copy.deepcopy(data))   
     return traj
-
-
 
 def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
     '''
@@ -294,6 +293,10 @@ def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False
         logrews[logrews<logrew_clamp] = logrew_clamp
         vargrad_quotients = logit_pf - logit_pb - logrews/T
         vargrad_loss = torch.var(vargrad_quotients)
+        # print gradients 
+        if train : 
+            gradients = torch.autograd.grad(logit_pf.sum(), model.parameters(), retain_graph=True, allow_unused=True)
+            print(gradients)
         return traj[-1].to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews
     
     else:
@@ -398,13 +401,12 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
         #print('energies after noising', [mmff_energy(pyg_to_mol(data.mol[i], samples[i].to('cpu'))) for i in range(len(samples)) ])
         conformers_noise.append(samples)
         traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device) # on-policy
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
-        #confs, loss_smile, logit_pf, logit_pb, logrew, total_perturb = sample_and_get_loss(samples, model, device, sigma_min=sigma_min, sigma_max=sigma_max,  steps=steps,train=train, T=T, logrew_clamp= logrew_clamp, energy_fn= energy_fn)  # on-policy
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
         total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb ) 
     elif train_mode == 'off_policy': 
         data = batch[0]
         torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points )
-        # Sample randomly a subset of torsion angles in torsion_angles_linspace
+        # Sample randomly a subset of torsion angles in torsion_angles_linspace. Otherwise the batch size is too big and we run out of memory
         if train: 
             thetas0, thetas1 = np.random.choice(torsion_angles_linspace, 3, replace=False), np.random.choice(torsion_angles_linspace, 3, replace=False)
         else:
@@ -421,8 +423,10 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
                 data0.total_perturb = torch.zeros(len(data0.mask_rotate))
                 samples.append(data0)
         traj = sample_backward_trajs(samples, sigma_min, sigma_max,  steps)
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
         total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb ) 
+    else:
+        raise NotImplementedError(f"Training mode {train_mode} not implemented!")
     
     conformers.append(confs)
     logit_pfs.append(logit_pf.detach())
@@ -458,25 +462,17 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
     if use_wandb:
         wandb.log({"train_loss": train_loss})
 
-
+    '''
     # Log energies/logpT metrics
     energies_train_on_policy = get_energies(conformers_train_gen)
     energies_train_rand = get_energies(conformers_train_noise)   
-    #logpT_train_on_policy = [get_logpT(confs, model, sigma_min, sigma_max,  steps) for confs in conformers_train_gen]
-    #logpT_train_rand = [get_logpT( confs , model, sigma_min, sigma_max,  steps) for confs in conformers_train_noise]
-
-    '''
-    # log 2 histograms of energies/logpTs
     print('energies_train_on_policy', list(energies_train_on_policy.values())[0])
     if use_wandb:
         wandb.log({
         "energies_train_rand": wandb.Histogram(list(energies_train_rand.values())[0], num_bins = 10),
         "energies_train_on_policy": wandb.Histogram(list(energies_train_on_policy.values())[0], num_bins = 10)
     })
-        wandb.log({  "logpTs_train_rand": wandb.Histogram(logpT_train_rand[0].numpy(), num_bins = 10),
-        "logpTs_train_on_policy": wandb.Histogram(logpT_train_on_policy[0].numpy(), num_bins = 10)
-        })
-    '''   
+    '''
 
 
     # Plot the heatmap of learned logpts on wandb
@@ -488,9 +484,6 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
         data = batch[0]
         
         energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn)
-        energy_landscape0, logpTs0= get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn)
-        assert energy_landscape0 == energy_landscape
-        assert np.abs(np.array(logpTs0)  - np.array(logpTs)).mean() / np.abs(logpTs0).mean() < 1e-2
         energy_landscape, logpTs = np.array(energy_landscape), np.array(logpTs)
         plt.figure()
         plt.imshow(energy_landscape, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(energy_landscape), vmax=np.max(energy_landscape))

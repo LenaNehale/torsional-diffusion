@@ -1,6 +1,4 @@
 from diffusion.sampling import *
-from gflownet.gfn_train import sample_and_get_loss
-
 class BoltzmannResampler:
     def __init__(self, args, model=None):
         self.model = model

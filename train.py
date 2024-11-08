@@ -33,7 +33,7 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
             train_loss, _, conformers,_,_,_, _  = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 8, max_batches=1, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, num_points=num_points)
         print("Epoch {}: Training Loss {}".format(epoch, train_loss))
     '''
-        val_loss, base_val_loss = test_epoch(model, val_loader, device)
+        val_loss, base_val_loss = test_epoch(model, val_loader, device) 
         print("Epoch {}: Validation Loss {} base loss {}".format(epoch, val_loss, base_val_loss))
 
         if scheduler:
