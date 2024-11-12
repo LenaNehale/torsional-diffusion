@@ -1,11 +1,16 @@
 from argparse import ArgumentParser
-
+import os
+from pathlib import Path
+if 'SCRATCH' in os.environ:
+    SCRATCH=Path(os.environ['SCRATCH'])
+else:
+    SCRATCH = Path(__file__).resolve().parent.parent
 
 def parse_train_args():
 
     # General arguments
     parser = ArgumentParser()
-    parser.add_argument('--log_dir', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/test_run', help='Folder in which to save model and logs')
+    parser.add_argument('--log_dir', type=str, default=SCRATCH / 'torsional-diffusion/workdir/test_run', help='Folder in which to save model and logs')
     #parser.add_argument('--restart_dir', default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T300' ,  type=str, help='Folder of previous training model from which to restart')
     parser.add_argument('--restart_dir', default=None ,  type=str, help='Folder of previous training model from which to restart')
     parser.add_argument('--cache', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/cache/test_run', help='Folder from where to load/restore cached dataset')
