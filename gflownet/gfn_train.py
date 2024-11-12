@@ -366,6 +366,35 @@ def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, like
     return grad
 
 
+
+def get_loss_dummy(model, sigma_min, sigma_max, smi, device, train):
+    #Load pickle of dummy ground truth conformers
+    data = pickle.load(open('dummy_data_randchoice.pkl', 'rb'))
+    data = Batch.from_data_list(data).to(device)
+    assert data.canonical_smi[0] == smi
+    # Noise data 
+    sigma = np.exp(np.random.uniform(low=np.log(sigma_min), high=np.log(sigma_max)))
+    data.node_sigma = (sigma * torch.ones(data.num_nodes)).to(device)
+    torsion_updates = np.random.normal(loc=0.0, scale=sigma, size=data.edge_mask.sum())
+    data_cpu = copy.deepcopy(data).to('cpu')
+    data_cpu.pos = perturb_batch(data_cpu, torsion_updates) 
+    data.pos = data_cpu.pos.to(device)
+    data.edge_rotate = torch.tensor(torsion_updates).to(device)
+    #predict score and compute loss
+    model = model.to(device)
+    with torch.no_grad() if not train else contextlib.nullcontext():   
+        data = model(data)
+    pred = data.edge_pred
+    score = torus.score(
+        data.edge_rotate.cpu().numpy(),
+        data.edge_sigma.cpu().numpy())
+    score = torch.tensor(score, device=pred.device)
+    score_norm = torus.score_norm(data.edge_sigma.cpu().numpy())
+    score_norm = torch.tensor(score_norm, device=pred.device)
+    loss = ((score - pred) ** 2 / score_norm).mean()
+    return loss
+
+
 def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, n_trajs = 8, max_batches = None, smi = None, logrew_clamp = -1e3, energy_fn = None, train_mode = None, ix0=None, ix1=None, num_points = None):
     if train:
         model.train() # set model to training mode
@@ -398,11 +427,12 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
         #print('energies before noising', [mmff_energy(pyg_to_mol(data.mol[i], data[i].to('cpu'))) for i in range(len(samples)) ]) 
         samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
         data = Batch.from_data_list(samples)
+        total_perturb_init = data.total_perturb
         #print('energies after noising', [mmff_energy(pyg_to_mol(data.mol[i], samples[i].to('cpu'))) for i in range(len(samples)) ])
         conformers_noise.append(samples)
         traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device) # on-policy
         confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
-        total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb ) 
+        total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb  - total_perturb_init) 
     elif train_mode == 'off_policy': 
         data = batch[0]
         torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points )
@@ -417,21 +447,25 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
                 data0 = copy.deepcopy(data)
                 torsion_update = np.zeros(len(data0.mask_rotate))
                 torsion_update[ix0], torsion_update[ix1] = theta0, theta1
-                print(torsion_update, theta0, theta1)
                 new_pos = modify_conformer(data0.pos, data0.edge_index.T[data0.edge_mask], data0.mask_rotate, torsion_update, as_numpy=False) 
                 data0.pos = new_pos
-                data0.total_perturb = torch.zeros(len(data0.mask_rotate))
+                data0.total_perturb = torsion_update
                 samples.append(data0)
         traj = sample_backward_trajs(samples, sigma_min, sigma_max,  steps)
         confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
         total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb ) 
+    
+    elif train_mode =='dummy':
+        loss_smile = get_loss_dummy(model, sigma_min, sigma_max, smi, device, train)
+        confs, logit_pf, logit_pb, logrew = None, None, None, None
     else:
         raise NotImplementedError(f"Training mode {train_mode} not implemented!")
     
     conformers.append(confs)
-    logit_pfs.append(logit_pf.detach())
+    logit_pfs.append(logit_pf.detach() if logit_pf is not None else None)
     logit_pbs.append(logit_pb)
     logrews.append(logrew)
+    print('loss smile' , loss_smile)
     loss_smile = loss_smile / len(batch)
     if train:
         loss_smile.backward()
@@ -457,7 +491,7 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
 
     # Log vargrad loss on the replay buffer/training set/val set
     train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs = gfn_epoch(
-        model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, n_trajs = n_trajs, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode=train_mode, num_points = num_points
+        model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, n_trajs = n_trajs, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='on_policy', num_points = num_points
     )
     if use_wandb:
         wandb.log({"train_loss": train_loss})
@@ -511,6 +545,12 @@ def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_mi
         plt.xlim(0, 2*np.pi)
         plt.ylim(0, 2*np.pi)
         plt.scatter(theta0, theta1, c='r', s=5)
+        # plot the ground truth torsion angles from dummy data
+        dummy_data = pickle.load(open('dummy_data_randchoice.pkl', 'rb'))
+        gt_total_perturb = Batch.from_data_list(dummy_data).total_perturb.reshape(-1, num_torsion_angles)
+        gt_theta0, gt_theta1 = gt_total_perturb[:,ix0]%(2*np.pi) , gt_total_perturb[:,ix1]%(2*np.pi)
+        print('gt_theta0', gt_theta0, 'gt_theta1', gt_theta1)
+        plt.scatter(gt_theta0, gt_theta1, c='b', s=15)
         plt.xlabel('Theta0')
         plt.ylabel('Theta1')
         plt.title('Samples')

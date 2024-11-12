@@ -64,7 +64,7 @@ def modify_conformer(pos_input, edge_index, mask_rotate, torsion_updates_input, 
     for idx_edge, e in enumerate(edge_index.cpu().numpy()):
         if torsion_updates[idx_edge] == 0:
             continue
-        u, v = e[0], e[1]
+        u, v = int(e[0]), int(e[1])
 
         # check if need to reverse the edge, v should be connected to the part that gets rotated
         assert not mask_rotate[idx_edge, u] or not mask_rotate[idx_edge, u.item()]

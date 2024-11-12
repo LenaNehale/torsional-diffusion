@@ -65,11 +65,14 @@ class NoTransform(BaseTransform):
             data.edge_mask = torch.tensor(data.mask_edges)
 
         data.node_sigma = None
+        torsion_updates = np.zeros(edge_mask.sum())
+        data.edge_rotate = torch.tensor(torsion_updates)
 
         return data
 
     def __repr__(self) -> str:
         return (f'{self.__class__.__name__}(no_transform)')
+
 
 class ConformerDataset(Dataset):
     def __init__(self, root, split_path, mode, types, dataset, transform=None, num_workers=1, limit_molecules=None,
@@ -269,7 +272,7 @@ def construct_loader(args, modes=('train', 'val'), boltzmann_resampler=None):
 
     loaders = []
     #transform = TorsionNoiseTransform(sigma_min=args.sigma_min, sigma_max=args.sigma_max,boltzmann_weight=args.boltzmann_weight)
-    transform = NoTransform(sigma_min=args.sigma_min, sigma_max=args.sigma_max,boltzmann_weight=args.boltzmann_weight)
+    transform = NoTransform(sigma_min=args.sigma_min, sigma_max=args.sigma_max,boltzmann_weight=args.boltzmann_weight) # To allow for using ground truth data (starting from this and sampling backwards)
     types = qm9_types if args.dataset == 'qm9' else drugs_types
 
     for mode in modes:
