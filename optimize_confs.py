@@ -19,9 +19,14 @@ args = parser.parse_args()
     Takes as input a dictionary of generated conformers, performs MMFF or xTB relaxations 
     and computes the properties of each conformer
 """
+from pathlib import Path
+if 'SCRATCH' in os.environ:
+    SCRATCH=Path(os.environ['SCRATCH'])
+else:
+    SCRATCH = Path(__file__).resolve().parent.parent
 
 #test_data = pd.read_csv('data/DRUGS/test_smiles_corrected.csv').values
-#test_data = pd.read_csv('/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv')
+#test_data = pd.read_csv(SCRATCH / 'torsional-diffusion/DRUGS/test_smiles.csv')
 
 
 #test_data = test_data[::args.skip]

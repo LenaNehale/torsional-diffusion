@@ -11,11 +11,19 @@ from utils.utils import get_model
 from diffusion.sampling import *
 from gflownet.gfn_train import sample_and_get_loss
 
+from pathlib import Path
+if 'SCRATCH' in os.environ:
+    SCRATCH=Path(os.environ['SCRATCH'])
+else:
+    SCRATCH = Path(__file__).resolve().parent.parent
+
+
+
 parser = ArgumentParser()
-parser.add_argument('--model_dir', type=str, default = '/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/workdir/boltz_T300',  help='Path to folder with trained model and hyperparameters')
+parser.add_argument('--model_dir', type=str, default = SCRATCH / 'torsional-diffusion/workdir/boltz_T300',  help='Path to folder with trained model and hyperparameters')
 parser.add_argument('--ckpt', type=str, default='best_model.pt', help='Checkpoint to use inside the folder')
 parser.add_argument('--out', type=str, default = None, help='Path to the output pickle file')
-parser.add_argument('--test_csv', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsional-diffusion/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
+parser.add_argument('--test_csv', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/test_smiles.csv', help='Path to csv file with list of smiles and number conformers')
 parser.add_argument('--pre_mmff', action='store_true', default=False, help='Whether to run MMFF on the local structure conformer')
 parser.add_argument('--post_mmff', action='store_true', default=False, help='Whether to run MMFF on the final generated structures')
 parser.add_argument('--no_random', action='store_true', default=False, help='Whether avoid randomising the torsions of the seed conformer')

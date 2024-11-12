@@ -282,5 +282,3 @@ dependencies:
     - wcwidth==0.2.13
     - widgetsnbextension==4.0.13
     - yarl==1.9.4
-prefix: /home/mila/l/lena-nehale.ezzine/.conda/envs/torsional_diffusion
-
