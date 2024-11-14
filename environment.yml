@@ -2,8 +2,10 @@ name: torsional_diffusion
 channels:
   - conda-forge
   - defaults
-  - nodefaults
+  - pytorch
+  - pyg
 dependencies:
+<<<<<<< HEAD
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
   - alsa-lib=1.2.12=h4ab18f5_0
@@ -282,3 +284,9 @@ dependencies:
     - wcwidth==0.2.13
     - widgetsnbextension==4.0.13
     - yarl==1.9.4
+=======
+  - python=3.9
+  - rdkit
+  - pyaml
+  - matplotlib
+>>>>>>> parent of a61fbf4 (update env packages)
