@@ -86,7 +86,7 @@ class ConformerDataset(Dataset):
         self.dataset = dataset
         self.boltzmann_resampler = boltzmann_resampler
 
-        if cache: cache += "." + mode
+        if cache: cache = str(cache) + "." + mode
         self.cache = cache     
         if cache and os.path.exists(cache):
             print('Reusing preprocessing from cache', cache)

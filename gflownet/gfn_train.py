@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import diffusion.torus as torus
-import time
+import time 
 import contextlib
 from utils.dataset import ConformerDataset
 from utils.featurization import drugs_types
@@ -23,6 +23,8 @@ if use_wandb:
     wandb.login()
     run = wandb.init(project="gfn_torsional_diff")
 
+# for dummy dataset
+dummy_data_pkl, ix0, ix1 = 'dummy_data_randchoice.pkl', 2, 3
 
 """
     Training procedures for conformer generation using GflowNets.
@@ -75,7 +77,7 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
     return logp, traj
 
 
-def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device, num_points=10, ix0=0, ix1=1, energy_fn = None ):
+def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn):
     '''
     Get 2Denergy heatmap and logpT heatmap. Both are obtained by computing the energy for different values (linspace) of the 2 torsion angles ix0 and ix1, while fixing the other torsion angles.
     Args:
@@ -110,6 +112,8 @@ def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device,
                 energy_landscape[-1].append(mmff_energy(mol))
             elif energy_fn == 'dummy':
                 energy_landscape[-1].append( - 20*( 3 +  torch.cos(theta0*3) + torch.sin(theta1*3) ))
+            elif energy_fn == 'toy':
+                energy_landscape[-1].append( - get_likelihood(dummy_data_pkl, theta0, theta1, ix0, ix1) / 0.01)
         logpT, trajs_ode = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device)
         logpT = logpT.tolist()
         #logpT0, trajs_ode0 = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device)
@@ -247,6 +251,20 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
         logp = None
     return logit_pf, logit_pb, logp
 
+def get_multivariate_gaussian(x, mu, sigma):
+    return  1/( (2*np.pi)**0.5 * sigma) * torch.exp(-0.5 * torch.sum(((x - mu))**2) / sigma**2)
+
+def get_likelihood(pkl_file, theta0, theta1, ix0, ix1):
+    dummy_data = pickle.load(open(pkl_file, 'rb'))
+    num_torsion_angles = len(dummy_data[0].mask_rotate)
+    gt_total_perturb = Batch.from_data_list(dummy_data).total_perturb.reshape(-1, num_torsion_angles)
+    gt_theta0, gt_theta1 = gt_total_perturb[:,ix0]%(2*np.pi) , gt_total_perturb[:,ix1]%(2*np.pi)
+    gaussians = []
+    for mu0, mu1 in zip(gt_theta0, gt_theta1):
+        gaussian = get_multivariate_gaussian(torch.Tensor([theta0, theta1]), torch.Tensor([mu0, mu1]), 0.2)
+        gaussians.append(gaussian)
+    return torch.stack(gaussians).mean().item()
+
 
 def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=False, loss='vargrad', logrew_clamp = -1e3):
     '''
@@ -274,33 +292,40 @@ def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False
     logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=likelihood, train=train)
     data = traj[-1]
     bs = len(data)
-    if loss == 'vargrad':
-        try:
-            #assert all(x == data.name[0] for x in data.name)
-            assert all( data[i].canonical_smi == data[0].canonical_smi for i in range(len(data)))
-        except:
-            raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
-        # Computing logrews
-        if energy_fn == "mmff":
-            logrews = (-torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])/ T)
-            #print('energies after sampling', [mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs) ])
-        elif energy_fn == 'dummy':
-            total_perturb = traj[-1].total_perturb - traj[0].total_perturb
-            logrews = - 20*( 3 +  torch.cos(total_perturb.reshape(bs, -1)[:,0]*3) + torch.sin(total_perturb.reshape(bs, -1)[:,1]*3) )  
-        else:
-            raise  NotImplementedError(f"WARNING: Energy function {energy_fn} not implemented!")
-        # logrews clamping. Mandatory, otherwise we get crazy values for variance
-        logrews[logrews<logrew_clamp] = logrew_clamp
-        vargrad_quotients = logit_pf - logit_pb - logrews/T
-        vargrad_loss = torch.var(vargrad_quotients)
-        # print gradients 
-        if train : 
-            gradients = torch.autograd.grad(logit_pf.sum(), model.parameters(), retain_graph=True, allow_unused=True)
-            print(gradients)
-        return traj[-1].to_data_list(), vargrad_loss, logit_pf, logit_pb, logrews
     
+    try:
+        #assert all(x == data.name[0] for x in data.name)
+        assert all( data[i].canonical_smi == data[0].canonical_smi for i in range(len(data)))
+    except:
+        raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
+    if energy_fn == "mmff":
+        logrews = (-torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])/ T)
+        #print('energies after sampling', [mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs) ])
+    elif energy_fn == 'dummy':
+        total_perturb = traj[-1].total_perturb - traj[0].total_perturb
+        logrews = - 20*( 3 +  torch.cos(total_perturb.reshape(bs, -1)[:,ix0]*3) + torch.sin(total_perturb.reshape(bs, -1)[:,ix1]*3) )  
+    elif energy_fn == 'toy':        
+        total_perturb = traj[-1].total_perturb - traj[0].total_perturb
+        logrews = - torch.Tensor([get_likelihood(dummy_data_pkl, total_perturb.reshape(bs, -1)[i,ix0],  total_perturb.reshape(bs, -1)[i,ix1] , ix0, ix1) for i in range(bs)]) / 0.01
     else:
-        raise NotImplementedError(f"WARNING: Loss function {loss} not implemented!")
+        raise  NotImplementedError(f"Energy function {energy_fn} not implemented!")
+    # logrews clamping. Mandatory, otherwise we get crazy values for variance
+    logrews[logrews<logrew_clamp] = logrew_clamp
+    #TB Loss 
+    if loss == 'vargrad':
+        logZ_hat = (logit_pb + logrews/T - logit_pf).detach()
+        logZ_hat = reduce(logZ_hat, "bs -> ", "mean")
+
+    else:
+        raise NotImplementedError(f"Loss {loss} not implemented!")
+    TB_loss = torch.pow(logZ_hat + logit_pf - logit_pb - logrews/T, 2)
+    TB_loss = reduce(TB_loss, "bs -> ", "mean")
+    if train : 
+        gradients = torch.autograd.grad(logit_pf.sum(), model.parameters(), retain_graph=True, allow_unused=True)
+        print(gradients)
+    return traj[-1].to_data_list(), TB_loss, logit_pf, logit_pb, logrews
+
+    
 
 def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, pdb=None, energy_fn="dummy", T=1.0, loss='vargrad', logrew_clamp = -1e3):
     logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=likelihood, train=False)
@@ -317,7 +342,10 @@ def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, like
         #print('energies after sampling', [mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs) ])
     elif energy_fn == 'dummy':
         total_perturb = traj[-1].total_perturb - traj[0].total_perturb
-        logrews = - 20*( 3 +  torch.cos(total_perturb.reshape(bs, -1)[:,0]*3) + torch.sin(total_perturb.reshape(bs, -1)[:,1]*3) )  
+        logrews = - 20*( 3 +  torch.cos(total_perturb.reshape(bs, -1)[:,ix0]*3) + torch.sin(total_perturb.reshape(bs, -1)[:,ix1]*3) ) 
+    elif energy_fn == 'toy':
+        total_perturb = traj[-1].total_perturb - traj[0].total_perturb
+        logrews = - torch.Tensor([get_likelihood(dummy_data_pkl, total_perturb.reshape(bs, -1)[i,ix0],  total_perturb.reshape(bs, -1)[i,ix1] , ix0, ix1) for i in range(bs)]) / 0.01 
     else:
         raise  NotImplementedError(f"WARNING: Energy function {energy_fn} not implemented!")
     # logrews clamping. Mandatory, otherwise we get crazy values for variance
@@ -369,7 +397,7 @@ def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, like
 
 def get_loss_dummy(model, sigma_min, sigma_max, smi, device, train):
     #Load pickle of dummy ground truth conformers
-    data = pickle.load(open('dummy_data_randchoice.pkl', 'rb'))
+    data = pickle.load(open( dummy_data_pkl , 'rb'))
     data = Batch.from_data_list(data).to(device)
     assert data.canonical_smi[0] == smi
     # Noise data 
@@ -431,7 +459,7 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
         #print('energies after noising', [mmff_energy(pyg_to_mol(data.mol[i], samples[i].to('cpu'))) for i in range(len(samples)) ])
         conformers_noise.append(samples)
         traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device) # on-policy
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=1.0, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
         total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb  - total_perturb_init) 
     elif train_mode == 'off_policy': 
         data = batch[0]
@@ -452,7 +480,7 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
                 data0.total_perturb = torsion_update
                 samples.append(data0)
         traj = sample_backward_trajs(samples, sigma_min, sigma_max,  steps)
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="dummy", T=1.0, train=train, loss='vargrad', logrew_clamp = -1e3)
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=1.0, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
         total_perturbs.append(traj[-1].total_perturb - traj[0].total_perturb ) 
     
     elif train_mode =='dummy':
@@ -487,7 +515,7 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
     return loss_tot, conformers_noise, conformers, logit_pfs, logit_pbs, logrews, total_perturbs
 
 
-def log_gfn_metrics(model, train_loader, val_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = None, logrew_clamp = -1e3, energy_fn = None, train_mode = None, ix0=None, ix1=None):
+def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = None, logrew_clamp = -1e3, energy_fn = None, ix0=None, ix1=None):
 
     # Log vargrad loss on the replay buffer/training set/val set
     train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs = gfn_epoch(
