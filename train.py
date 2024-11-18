@@ -5,13 +5,15 @@ from rdkit import RDLogger
 from utils.dataset import construct_loader
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
-from gflownet.gfn_train import gfn_epoch, log_gfn_metrics
+from gflownet.gfn_train import gfn_epoch, log_gfn_metrics, get_gt_score
 from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
 from utils.boltzmann import BoltzmannResampler
 from argparse import Namespace
 import copy
 RDLogger.DisableLog('rdApp.*')
 from gflownet.gfn_train import get_loss_dummy
+from tqdm import tqdm
+
 """
     Training procedures for both conformer generation and Botzmann generators
     The hyperparameters are taken from utils/parsing.py and can be given as arguments
@@ -26,10 +28,12 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
     for epoch in range(args.n_epochs):
         #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
         #print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
-        sigma_max, sigma_min,steps, T, num_points, logrew_clamp, energy_fn, train_mode, ix0, ix1 = np.pi, 0.01 * np.pi, 50, 1.0, 10, -1e3, 'toy', 'dummy', 2, 3
-        smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
+        sigma_max, sigma_min,steps, T, num_points, logrew_clamp, energy_fn, train_mode, ix0, ix1 = np.pi, 0.01 * np.pi, 50, 1.0, 10, -1e3, 'dummy', 'dummy', 0, 1
+        #smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
+        smi = 'Brc1cc2c(cc1Cn1c(-c3cncs3)nc3ccccc31)OCO2'
         conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=128, T=T,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1)
-        for _ in range(128):
+        #score = get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
+        for _ in tqdm(range(128)):
             train_loss, _, conformers,_,_,_, _  = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 8, max_batches=1, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, num_points=num_points)
         print("Epoch {}: Training Loss {}".format(epoch, train_loss))
     '''
