@@ -21,7 +21,7 @@ from utils.standardization import fast_rmsd
 import pickle
 import matplotlib.pyplot as plt
 from scipy.stats import multivariate_normal
-use_wandb = True
+use_wandb = False
 import random
 if use_wandb:
     import wandb
@@ -64,7 +64,7 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
             data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
             with torch.no_grad():
                 data_gpu = model(data_gpu)
-            ## apply reverse ODE perturbation
+            ## apply reverse ODE perturbation 
             g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
             score = data_gpu.edge_pred.cpu()
             perturb =  - 0.5 * g ** 2 * eps * score # minus is because we are going backwards
@@ -251,17 +251,15 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
         mean, std = g**2 * eps * score, g * np.sqrt(eps)
         perturb = traj[sigma_idx +1 ].total_perturb - traj[sigma_idx].total_perturb
         # compute the forward and backward (in gflownet language) transitions logprobs
-        for i in range(bs):
-            start, end = i * n_torsion_angles, (i + 1) * n_torsion_angles
-            # in forward, the new mean is obtained using the score (see above)
-            p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean)[start:end], std)
-            logit_pf[i, sigma_idx] += torch.log(p_trajs_forward).sum()
-            # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
-            sigma_b = sigma_schedule[sigma_idx + 1]
-            g_b = sigma_b * torch.sqrt( torch.tensor(2 * np.log(sigma_max / sigma_min)))
-            std_b = g_b * np.sqrt(eps)
-            p_trajs_backward = torus.p_differentiable(perturb[start:end].detach(), std_b)
-            logit_pb[i, sigma_idx] += torch.log(p_trajs_backward).sum()
+        # in forward, the new mean is obtained using the score (see above)
+        p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean), std)
+        logit_pf[:, sigma_idx] += torch.log(p_trajs_forward).reshape(-1, n_torsion_angles).sum(dim = -1)
+        # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
+        sigma_b = sigma_schedule[sigma_idx + 1]
+        g_b = sigma_b * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        std_b = g_b * np.sqrt(eps)
+        p_trajs_backward = torus.p_differentiable(perturb.detach(), std_b)
+        logit_pb[:, sigma_idx] += torch.log(p_trajs_backward).reshape(-1, n_torsion_angles).sum(dim = -1)
         
     logit_pf = reduce(logit_pf, "bs steps-> bs", "sum")
     logit_pb = reduce(logit_pb, "bs steps-> bs", "sum")
@@ -398,23 +396,19 @@ def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, like
         mean, std = g**2 * eps * score, g * np.sqrt(eps)
         perturb = traj[sigma_idx +1 ].total_perturb - traj[sigma_idx].total_perturb
         # compute the forward and backward (in gflownet language) transitions logprobs
-        logit_pf = torch.zeros(bs)
-        logit_pb = torch.zeros(bs)  
-        for i in range(bs):
-            start, end = i * n_torsion_angles, (i + 1) * n_torsion_angles
-            # in forward, the new mean is obtained using the score (see above)
-            p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean)[start:end], std)
-            logit_pf[i] = torch.log(p_trajs_forward).sum()
-            # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
-            sigma_b = sigma_schedule[sigma_idx + 1]
-            g_b = sigma_b * torch.sqrt( torch.tensor(2 * np.log(sigma_max / sigma_min)))
-            std_b = g_b * np.sqrt(eps)
-            p_trajs_backward = torus.p_differentiable(perturb[start:end].detach(), std_b)
-            logit_pb[i] = torch.log(p_trajs_backward).sum()
+        # in forward, the new mean is obtained using the score (see above)
+        p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean), std)
+        logit_pf = torch.log(p_trajs_forward).reshape(-1, n_torsion_angles).sum(dim = -1)
+        # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
+        sigma_b = sigma_schedule[sigma_idx + 1]
+        g_b = sigma_b * torch.sqrt( torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        std_b = g_b * np.sqrt(eps)
+        p_trajs_backward = torus.p_differentiable(perturb.detach(), std_b)
+        logit_pb = torch.log(p_trajs_backward).reshape(-1, n_torsion_angles).sum(dim = -1)
 
         # Get gradient of logit_pf with respect to parameters
-        grad_f = torch.autograd.grad((C.sum(axis = 1) * logit_pf).mean(), model.parameters(), create_graph=True)
-        grad_b = torch.autograd.grad((C.sum(axis = 1) * logit_pb).mean(), model.parameters(), create_graph=True)
+        grad_f = torch.autograd.grad((C.sum(axis = 1) * logit_pf).mean(), model.parameters(), retain_graph=True)
+        grad_b = torch.autograd.grad((C.sum(axis = 1) * logit_pb).mean(), model.parameters(), retain_graph=True)
         grad = 4*(grad_f - grad_b) if grad is None else grad + 4*(grad_f - grad_b)
         #Remove logit_pf, logit_pb from the computation graph
         logit_pf = logit_pf.detach()

@@ -33,7 +33,7 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
         num_points, num_trajs, ix0, ix1 = 20 ,16, 0, 1 
         #smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
         smi = 'Brc1cc2c(cc1Cn1c(-c3cncs3)nc3ccccc31)OCO2'
-        conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, diffusion_steps, n_trajs=128, T=rew_temp,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1, num_trajs = num_trajs)
+        #conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, diffusion_steps, n_trajs=128, T=rew_temp,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1, num_trajs = num_trajs)
         #score = get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, diffusion_steps = 5)
         for _ in tqdm(range(32)): 
             results = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, diffusion_steps, train = True, n_trajs = 8, max_batches=1, T=rew_temp, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, num_points=num_points)
