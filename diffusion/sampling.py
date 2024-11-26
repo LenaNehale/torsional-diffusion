@@ -86,7 +86,7 @@ def perturb_seeds(data, pdb=None):
         torsion_updates = np.random.uniform(low=-np.pi,high=np.pi, size=data_conf.edge_mask.sum())
         data_conf.pos = modify_conformer(data_conf.pos, data_conf.edge_index.T[data_conf.edge_mask],
                                          data_conf.mask_rotate, torsion_updates)
-        data_conf.total_perturb = torch.Tensor(torsion_updates)
+        data_conf.total_perturb = torch.Tensor(torsion_updates) % (2 * np.pi)
         if pdb:
             pdb.add(data_conf.pos, part=i, order=1, repeat=still_frames)
     return data

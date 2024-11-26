@@ -26,16 +26,18 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
     print("Starting training (not boltzmann)...")
     for epoch in range(args.n_epochs):
-        #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device)
+        #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device) 
         #print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
-        sigma_max, sigma_min,steps, T, num_points, logrew_clamp, energy_fn, train_mode, ix0, ix1 = np.pi, 0.01 * np.pi, 50, 1.0, 10, -1e3, 'dummy', 'dummy', 0, 1
+        sigma_max, sigma_min, diffusion_steps = np.pi, 0.01, 50
+        train_mode, energy_fn,logrew_clamp, rew_temp = 'dummy', 'dummy', - 1000, 1.0
+        num_points, num_trajs, ix0, ix1 = 20 ,16, 0, 1 
         #smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
         smi = 'Brc1cc2c(cc1Cn1c(-c3cncs3)nc3ccccc31)OCO2'
-        conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs=128, T=T,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1)
-        #score = get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
-        for _ in tqdm(range(128)):
-            train_loss, _, conformers,_,_,_, _  = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train = True, n_trajs = 8, max_batches=1, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, num_points=num_points)
-        print("Epoch {}: Training Loss {}".format(epoch, train_loss))
+        conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, diffusion_steps, n_trajs=128, T=rew_temp,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1, num_trajs = num_trajs)
+        #score = get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, diffusion_steps = 5)
+        for _ in tqdm(range(32)): 
+            results = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, diffusion_steps, train = True, n_trajs = 8, max_batches=1, T=rew_temp, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, num_points=num_points)
+        print("Epoch {}: Training Loss {}".format(epoch, results[0]))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 
         print("Epoch {}: Validation Loss {} base loss {}".format(epoch, val_loss, base_val_loss))
