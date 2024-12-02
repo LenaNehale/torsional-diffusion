@@ -5,13 +5,14 @@ from rdkit import RDLogger
 from utils.dataset import construct_loader
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
-from gflownet.gfn_train import gfn_epoch, log_gfn_metrics, get_gt_score
+from gflownet.gfn_train import gfn_epoch, log_gfn_metrics, get_gt_score, ReplayBufferClass
 from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
 from utils.boltzmann import BoltzmannResampler
 from argparse import Namespace
 import copy
+import wandb
+
 RDLogger.DisableLog('rdApp.*')
-from gflownet.gfn_train import get_loss_dummy
 from tqdm import tqdm
 
 """
@@ -28,15 +29,21 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
     for epoch in range(args.n_epochs):
         #train_loss, base_train_loss = train_epoch(model, train_loader, optimizer, device) 
         #print("Epoch {}: Training Loss {}  base loss {}".format(epoch, train_loss, base_train_loss))
-        sigma_max, sigma_min, diffusion_steps = np.pi, 0.01, 50
-        train_mode, energy_fn,logrew_clamp, rew_temp = 'dummy', 'dummy', - 1000, 1.0
-        num_points, num_trajs, ix0, ix1 = 20 ,16, 0, 1 
+        sigma_max, sigma_min, diffusion_steps = np.pi, 0.01, 10
+        train_mode, energy_fn,logrew_clamp, rew_temp = 'mle', 'dummy', - 1000, 1
+        num_points, num_trajs, ix0, ix1 = 10 ,16, 0, 1 
+        #ReplayBuffer = ReplayBufferClass(max_size = 1000)
+        ReplayBuffer = None
         #smi = 'CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O'
         smi = 'Brc1cc2c(cc1Cn1c(-c3cncs3)nc3ccccc31)OCO2'
-        #conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, diffusion_steps, n_trajs=128, T=rew_temp,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1, num_trajs = num_trajs)
-        #score = get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, diffusion_steps = 5)
-        for _ in tqdm(range(32)): 
-            results = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, diffusion_steps, train = True, n_trajs = 8, max_batches=1, T=rew_temp, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, num_points=num_points)
+        use_wandb = True
+        if use_wandb:
+            wandb.login()
+            run = wandb.init(project="gfn_torsional_diff")
+        conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, diffusion_steps, n_trajs=256, T=rew_temp,  max_batches=1, smi = smi, num_points=num_points, logrew_clamp=logrew_clamp, energy_fn=energy_fn, ix0=ix0, ix1=ix1, num_trajs = num_trajs, use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, train_mode = train_mode)
+        #score = get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
+        for _ in tqdm(range(128)): 
+            results = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, diffusion_steps, train = True, n_trajs = 16, max_batches=1, T=rew_temp, smi = smi, logrew_clamp = logrew_clamp, energy_fn = energy_fn, train_mode = train_mode, ix0= ix0, ix1=ix1, use_wandb = use_wandb, ReplayBuffer = ReplayBuffer)
         print("Epoch {}: Training Loss {}".format(epoch, results[0]))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 
@@ -111,7 +118,7 @@ if __name__ == '__main__':
 
     # record parameters
     #yaml_file_name = os.path.join(args.log_dir, 'model_parameters.yml')
-    #save_yaml_file(yaml_file_name, args.__dict__)
+    #save_yaml_file(yaml_file_name, args.__dict__) 
     args.device = device
 
     if args.boltzmann_training:

@@ -27,7 +27,7 @@ class TorsionNoiseTransform(BaseTransform):
             #data.pos = random.choices(data.pos, data.weights, k=1)[0]
         #else:
             #data.pos = random.choice(data.pos)
-        data.pos = data.pos[0] #chercher la conf avec la plus basse energie?
+        data.pos = data.pos[6] #chercher la conf avec la plus basse energie?
 
         try:
             edge_mask, mask_rotate = data.edge_mask, data.mask_rotate
@@ -56,7 +56,7 @@ class NoTransform(BaseTransform):
 
     def __call__(self, data):
         # select conformer
-        data.pos = data.pos[0] #chercher la conf avec la plus basse energie?
+        data.pos = data.pos[6] #chercher la conf avec la plus basse energie?
 
         try:
             edge_mask, mask_rotate = data.edge_mask, data.mask_rotate
