@@ -37,12 +37,13 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
     print("Starting training (not boltzmann)...")
     for epoch in range(args.n_epochs):
-        ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
+        #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
+        ReplayBuffer = None
         seed_everything(args.seed)
         if args.use_wandb:
             wandb.login()
             run = wandb.init(project="gfn_torsional_diff")
-            run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}"
+            run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_{args.smi}"
         conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp,  max_batches=1, smi = args.smi, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
         #score = get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
         for _ in tqdm(range(args.num_sgd_steps)): 

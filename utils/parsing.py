@@ -20,16 +20,15 @@ def parse_train_args():
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
 
-    #Data arguments
+    
+    #GflowNet arguments
     parser.add_argument('--smi', type=str, default='Brc1cc2c(cc1Cn1c(-c3cncs3)nc3ccccc31)OCO2', help='SMILES string for which to generate conformers')
     parser.add_argument('--gt_data_path', type=str, default='dummy_data_gaussian.pkl', help='Path to the ground truth data')
-
-    #GflowNet arguments
-    parser.add_argument('--train_mode', type=str, default='diffusion', help='Training mode for GflowNets')
+    parser.add_argument('--train_mode', type=str, default='mle', help='Training mode for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='dummy', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-100000, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default=1, help='Temperature for rewards')
-    parser.add_argument('--replay_buffer_size', type=int, default=1000, help='Size of the replay buffer')
+    parser.add_argument('--replay_buffer_size', type=int, default=100, help='Size of the replay buffer')
     parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=256, help='Batch size for evaluation')
     parser.add_argument('--num_sgd_steps', type=int, default=512, help='Number of SGD steps')

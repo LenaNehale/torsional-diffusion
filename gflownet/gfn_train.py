@@ -74,8 +74,8 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
             traj.append(copy.deepcopy(data))
         pickle.dump(mols, open("mols_ode_backwards.pkl", "wb"))
         # Get rmsds of noised conformers compared to traj[-1]
-        rmsds = [get_rmsds(mols[i], mols[-1]) for i in range(len(mols))]
-        print('RMSDs(mols[t], mols[0]) for t in [0, T]', [np.mean(r) for r in rmsds])
+        #rmsds = [get_rmsds(mols[i], mols[-1]) for i in range(len(mols))]
+        #print('RMSDs(mols[t], mols[0]) for t in [0, T]', [np.mean(r) for r in rmsds])
 
     else:
         conformers = [ x for x in conformers for _ in range(num_trajs)]
@@ -172,8 +172,8 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         mols.append([pyg_to_mol(data.mol[i], data[i], copy=True) for i in range(bs)])
     
     # get rmsds of noised conformers compared to traj[0]
-    rmsds = [get_rmsds(mols[i], mols[0]) for i in range(len(mols))]
-    print('RMSDs:', [np.mean(r) for r in rmsds])
+    #rmsds = [get_rmsds(mols[i], mols[0]) for i in range(len(mols))]
+    #print('RMSDs:', [np.mean(r) for r in rmsds])
     return traj
 
 def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
@@ -262,7 +262,8 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
 
 
 def get_dummy_logrew(total_perturb, bs):
-    mean = [1,1,0]
+    num_torsion_angles = total_perturb.reshape(bs, -1).shape[1]
+    mean = torch.ones(num_torsion_angles)
     sigma = 0.05 
     mvn = multivariate_normal(mean = mean, cov = sigma * torch.eye(len(mean)), allow_singular = False, seed = 42)
     probs = mvn.pdf(total_perturb.reshape(bs, -1).cpu().numpy())
@@ -477,22 +478,37 @@ class ReplayBufferClass():
     '''
     def __init__(self, max_size = 1000):
         self.max_size = max_size
-        self.buffer = []
+        self.datapoints = [] # list of torchgeom.data objects
+        self.logrews = torch.Tensor([])
     def __len__(self):
-        return len(self.buffer)
+        return len(self.datapoints)
     def update(self, trajs, logrews):
+        logrew_before_update =  torch.mean(self.logrews).item()
         #convert each elemnt in trajs to data_list
         trajs_list = [x.to_data_list() for x in trajs]
         trajs_list = list(map(list, zip(*trajs_list)))
-        for traj, logrew in zip(trajs_list, logrews):
-            self.buffer.append([traj, logrew.item()])
-        self.buffer = sorted(self.buffer, key=lambda x: x[1], reverse=True)
-        if len(self.buffer) > self.max_size:
-            self.buffer = self.buffer[:self.max_size]
+        self.datapoints_before = copy.deepcopy(self.datapoints)
+        self.logrews_before = copy.deepcopy(self.logrews)
+        self.datapoints = self.datapoints + trajs_list 
+        self.logrews = torch.cat((self.logrews, logrews ))
+        # get indexes of sorted logrews
+        sorted_ixs = torch.argsort(self.logrews, descending = True)
+        self.datapoints = [self.datapoints[ix] for ix in sorted_ixs]
+        self.logrews = self.logrews[sorted_ixs]
+        if len(self.datapoints) > self.max_size:
+            self.datapoints_ = self.datapoints[:self.max_size]
+            self.logrews_ = self.logrews[:self.max_size]
+            logrew_after_update =  torch.mean(self.logrews_).item()
+            if logrew_after_update < logrew_before_update:
+                breakpoint()
+            self.datapoints = self.datapoints_
+            self.logrews = self.logrews_
+        
+
     def sample(self, n):
-        if len(self.buffer)>=n:
-            ixs = np.random.choice(len(self.buffer), n, replace=False)
-            return [self.buffer[ix] for ix in ixs]
+        if len(self.datapoints)>=n:
+            ixs = np.random.choice(len(self.datapoints), n, replace=False)
+            return [self.datapoints[ix]for ix in ixs], self.logrews[ixs]
         else:
             raise ValueError("Not enough elements in the buffer to sample")
 
@@ -522,28 +538,24 @@ def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, trai
     if train_mode == 'on_policy':
         data = batch[0] # only consider one smile for now
         samples = [copy.deepcopy(data) for _ in range(batch_size)]
-        print('smi:', [samples[0].canonical_smi])
         data = Batch.from_data_list(samples)
         samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
         data = Batch.from_data_list(samples)
         conformers_noise.append(samples)
         noise_scale = 1 # Set to a higher value for more noise (similar to 'epsilon-greedy' for discrete gfns)
         traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device, noise_scale)
+        
         if train and ReplayBuffer is not None:
-            if len(ReplayBuffer.buffer) > int(batch_size*0.5): 
-                traj_replay = ReplayBuffer.sample(int(batch_size*0.5))
-                traj_replay = [x[0] for x in traj_replay]
-            else:
-                traj_replay = []
-        else:
-           traj_replay = []
-
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj + traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
-        print('total perturb mean', traj[-1].total_perturb.reshape(-1,3).mean(axis = 0))
+            if len(ReplayBuffer) > int(batch_size*0.5): 
+                traj_replay, logrew_replay = ReplayBuffer.sample(int(batch_size*0.5))
+            
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj , model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
+       #num_torsion_angles = len(data.mask_rotate[0])
+        #print('total perturb mean', traj[-1].total_perturb.reshape(-1,num_torsion_angles).mean(axis = 0))
         if ReplayBuffer is not None:
             ReplayBuffer.update(traj, logrew)
             if use_wandb:
-                wandb.log({'ReplayBuffer mean logrew': np.mean([x[1] for x in ReplayBuffer.buffer]).item()})
+                wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.logrews).item()})
 
         total_perturbs.append(traj[-1].total_perturb ) 
     elif train_mode == 'off_policy': 
@@ -665,7 +677,7 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
     if use_wandb:
         wandb.log({"total_perturb_forward": wandb.Image(f"total_perturb_forward_{energy_fn}_{train_mode}_{seed}.png")})
 
-    if energy_fn == 'dummy':
+    if gt_data_path is not None:
         #RMSD between generated conformers and ground truth conformers
         gt_mols = [pyg_to_mol(dummy_data_batch[i].mol, dummy_data_batch[i], copy=True) for i in range(len(dummy_data_batch))]
         conformers_train_gen = conformers_train_gen[0]
@@ -732,13 +744,12 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
             gt_total_perturb = Batch.from_data_list(dummy_data).total_perturb.reshape(-1, num_torsion_angles)
             gt_theta0, gt_theta1 = gt_total_perturb[:,ix0]%(2*np.pi) , gt_total_perturb[:,ix1]%(2*np.pi)
             plt.scatter(gt_theta0, gt_theta1, c='b', s=30, alpha=0.25, marker = '^')
-        if ReplayBuffer is not None and len(ReplayBuffer.buffer) > 0:
+        if ReplayBuffer is not None and len(ReplayBuffer) > 0:
             #Plot traj[-1] in the replay buffer
-            traj_replay = ReplayBuffer.sample(min(1000, len(ReplayBuffer.buffer)))
-            traj_replay = [x[0] for x in traj_replay]
+            traj_replay, _ = ReplayBuffer.sample(min(ReplayBuffer.max_size, len(ReplayBuffer)))
             perturbs_replay = torch.stack([x[-1].total_perturb for x in traj_replay])
-            theta0, theta1 = perturbs_replay[:,ix0]%(2*np.pi) , perturbs_replay[:,ix1]%(2*np.pi)
-            plt.scatter(theta0, theta1, c='g', s=30, alpha=0.25, marker = 'x')
+            theta0replay, theta1replay = perturbs_replay[:,ix0]%(2*np.pi) , perturbs_replay[:,ix1]%(2*np.pi)
+            plt.scatter(theta0replay, theta1replay, c='g', s=30, alpha=0.25, marker = 'x')
         plt.xlabel(f'Theta{ix0}')
         plt.ylabel(f'Theta{ix1}')
         plt.title('Samples')
