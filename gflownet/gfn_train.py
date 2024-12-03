@@ -1,4 +1,4 @@
-from diffusion.sampling import *
+from diffusion.sampling import * 
 import torch
 torch.multiprocessing.set_sharing_strategy("file_system")
 import numpy as np
@@ -24,10 +24,6 @@ from scipy.stats import multivariate_normal
 import random
 import itertools
 import wandb
-
-
-# for dummy dataset
-dummy_data_pkl, ix0, ix1, ix2 = 'dummy_data_gaussian.pkl', 0, 1, 2
 
 """
     Training procedures for conformer generation using GflowNets.
@@ -137,7 +133,7 @@ def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device,
     return energy_landscape, logpTs
 
 
-def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, epsilon = 1):
+def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, noise_scale = 1):
     '''
     Sample forward trajectories.
     Args:
@@ -166,7 +162,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
         z = torch.normal(mean=0, std=1, size=data_gpu.edge_pred.shape)
         score = data_gpu.edge_pred.cpu()        
-        perturb = g**2 * eps * score + epsilon * g * np.sqrt(eps) * z
+        perturb = g**2 * eps * score + noise_scale * g * np.sqrt(eps) * z
         new_pos = perturb_batch(data, perturb) 
         data.pos = new_pos 
         data_gpu.pos = data.pos.to(device)
@@ -405,13 +401,16 @@ def get_rmsds(mols0, mols1):
         rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
     return rmsds
 
-def get_loss_diffusion(model, sigma_min, sigma_max, smi, device, train, use_wandb = False):
+def get_loss_diffusion(model, gt_data_path , sigma_min, sigma_max, smi, device, train, use_wandb = False):
     #Load pickle of dummy ground truth conformers
-    dummy_data = pickle.load(open( dummy_data_pkl , 'rb'))
+    if gt_data_path is not None:
+        gt_data = pickle.load(open( gt_data_path , 'rb'))
+    else:
+        raise ValueError("Please provide a path to the ground truth data")
+    
     # choose a subset of k elements from dummy_data 
-
-    dummy_data_batch = random.sample(dummy_data, 16)
-    data0 = Batch.from_data_list(dummy_data_batch).to(device)
+    gt_data_batch = random.sample(gt_data, 16)
+    data0 = Batch.from_data_list(gt_data_batch).to(device)
     data = copy.deepcopy(data0).to(device)
     assert data.canonical_smi[0] == smi
     # Noise data 
@@ -442,11 +441,11 @@ def get_loss_diffusion(model, sigma_min, sigma_max, smi, device, train, use_wand
     mols0 = [pyg_to_mol(data0.to('cpu')[i].mol, data0.to('cpu')[i], copy=True) for i in range(len(data0))]
     mols = [pyg_to_mol(data.to('cpu')[i].mol, data.to('cpu')[i], copy=True) for i in range(len(data))]
     rmsds = get_rmsds(mols0, mols)
-    #print('RMSDs:', np.mean(rmsds), 'sigma', sigma)
+    print('RMSDs:', np.mean(rmsds), 'sigma', sigma)
     return loss
 
-def get_gt_score(sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5):
-    gt_data = Batch.from_data_list(pickle.load(open( dummy_data_pkl , 'rb'))).to(device)
+def get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5):
+    gt_data = Batch.from_data_list(pickle.load(open( gt_data_path , 'rb'))).to(device)
     torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points)
     num_torsion_angles = len(gt_data.mask_rotate[0])
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
@@ -479,21 +478,25 @@ class ReplayBufferClass():
     def __init__(self, max_size = 1000):
         self.max_size = max_size
         self.buffer = []
+    def __len__(self):
+        return len(self.buffer)
     def update(self, trajs, logrews):
-        for traj, logrew in zip(trajs, logrews):
-            self.buffer.append((traj, logrew))
+        #convert each elemnt in trajs to data_list
+        trajs_list = [x.to_data_list() for x in trajs]
+        trajs_list = list(map(list, zip(*trajs_list)))
+        for traj, logrew in zip(trajs_list, logrews):
+            self.buffer.append([traj, logrew.item()])
         self.buffer = sorted(self.buffer, key=lambda x: x[1], reverse=True)
         if len(self.buffer) > self.max_size:
             self.buffer = self.buffer[:self.max_size]
     def sample(self, n):
-        if len(self.buffer>n):
-            return random.sample(self.buffer, n)
+        if len(self.buffer)>=n:
+            ixs = np.random.choice(len(self.buffer), n, replace=False)
+            return [self.buffer[ix] for ix in ixs]
         else:
             raise ValueError("Not enough elements in the buffer to sample")
 
-
-
-def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, n_trajs = 8, max_batches = None, smi = None, logrew_clamp = -1e3, energy_fn = None, train_mode = None, ix0=0, ix1=1, use_wandb = False, ReplayBuffer = None):
+def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, max_batches, smi , logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, gt_data_path):
     if train:
         model.train() # set model to training mode
     loss_tot = 0
@@ -518,24 +521,24 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
     loss_batch = 0  # list of per-smile vargrad loss
     if train_mode == 'on_policy':
         data = batch[0] # only consider one smile for now
-        samples = [copy.deepcopy(data) for _ in range(n_trajs)]
+        samples = [copy.deepcopy(data) for _ in range(batch_size)]
         print('smi:', [samples[0].canonical_smi])
         data = Batch.from_data_list(samples)
         samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
         data = Batch.from_data_list(samples)
         conformers_noise.append(samples)
-        epsilon = 1 if train else 1
-        traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device, epsilon) # on-policy
-        if ReplayBuffer is not None:
-            if len(ReplayBuffer.buffer) > int(n_trajs*0.5): 
-                traj_replay = ReplayBuffer.sample(int(n_trajs*0.5))
+        noise_scale = 1 # Set to a higher value for more noise (similar to 'epsilon-greedy' for discrete gfns)
+        traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device, noise_scale)
+        if train and ReplayBuffer is not None:
+            if len(ReplayBuffer.buffer) > int(batch_size*0.5): 
+                traj_replay = ReplayBuffer.sample(int(batch_size*0.5))
                 traj_replay = [x[0] for x in traj_replay]
             else:
                 traj_replay = []
         else:
            traj_replay = []
 
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj + traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
         print('total perturb mean', traj[-1].total_perturb.reshape(-1,3).mean(axis = 0))
         if ReplayBuffer is not None:
             ReplayBuffer.update(traj, logrew)
@@ -564,12 +567,12 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
         total_perturbs.append(traj[-1].total_perturb  ) 
     
     elif train_mode =='diffusion':
-        loss_smile = get_loss_diffusion(model, sigma_min, sigma_max, smi, device, train, use_wandb = use_wandb)
+        loss_smile = get_loss_diffusion(model, gt_data_path, sigma_min, sigma_max, smi, device, train, use_wandb = use_wandb)
         traj = None
         confs, logit_pf, logit_pb, logrew = None, None, None, None
     
     elif train_mode == 'mle': 
-        dummy_data = pickle.load(open( dummy_data_pkl , 'rb'))
+        dummy_data = pickle.load(open( gt_data_path , 'rb'))
         # choose a subset of k elements from dummy_data 
         dummy_data_batch = random.sample(dummy_data, 16)
         data0 = Batch.from_data_list(dummy_data_batch).to(device)
@@ -606,9 +609,6 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
         loss_smile.backward()  
         optimizer.step()          
     loss_batch += loss_smile.item()
-    #print(f'Available Memory: {torch.cuda.get_device_properties(device).total_memory / 1024**2:.2f} MB')
-    #print(f"Memory Allocated: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MB")
-    #print(f"Memory Reserved: {torch.cuda.memory_reserved(device) / 1024**2:.2f} MB")
     torch.cuda.empty_cache()
     if train:
         if  use_wandb:
@@ -624,10 +624,11 @@ def gfn_epoch(model, loader, optimizer, device,  sigma_min, sigma_max, steps, tr
     return loss_tot, conformers_noise, conformers, logit_pfs, logit_pbs, logrews, total_perturbs, trajs
 
 
-def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, n_trajs, T, max_batches = None, smi = None, num_points = None, logrew_clamp = -1e3, energy_fn = None, ix0=None, ix1=None, num_trajs = None, use_wandb = False, ReplayBuffer = None, train_mode = None):
+def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, batch_size, T, max_batches , smi , num_points , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, gt_data_path, seed):
+    assert smi is not None
     #Sanity check : the backward pass samples torsion angles in the uniform distribution
-    if energy_fn == 'dummy':
-        dummy_data = pickle.load(open(dummy_data_pkl, 'rb'))
+    if gt_data_path is not None:
+        dummy_data = pickle.load(open(gt_data_path, 'rb'))
         dummy_data_batch = random.sample(dummy_data, 16)
         back_trajs = sample_backward_trajs(dummy_data_batch, sigma_min, sigma_max,  steps)
         s0 = back_trajs[0].total_perturb.reshape(-1, len(dummy_data_batch[0].mask_rotate))
@@ -638,15 +639,16 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
         plt.xlabel('Theta0')
         plt.ylabel('Theta1')
         plt.title('s0')
-        plt.savefig("s0.png")
+        plt.savefig(f"s0_{energy_fn}_{train_mode}_{seed}.png")
         plt.close()
         if use_wandb:
-            wandb.log({"s0":  wandb.Image("s0.png")})
-        #Diffusion loss
-        train_loss_diffusion = get_loss_diffusion(model, sigma_min, sigma_max, smi, device, train = False, use_wandb = use_wandb)
+            wandb.log({"s0":  wandb.Image(f"s0_{energy_fn}_{train_mode}_{seed}.png")})
     
+        #Diffusion loss
+        train_loss_diffusion = get_loss_diffusion(model, gt_data_path, sigma_min, sigma_max, smi, device, train = False, use_wandb = use_wandb)
+        
     #vargrad loss
-    train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_epoch(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, n_trajs = n_trajs, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='on_policy', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer)
+    train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, batch_size = batch_size, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='on_policy', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, gt_data_path = gt_data_path)
     if use_wandb:
         wandb.log({"vargrad loss": train_loss})
     # Plot evolution of total_perturb in forward pass
@@ -658,10 +660,10 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
     plt.xlabel('Timestep')
     plt.ylabel('Total Perturb')
     plt.title('Total Perturbations in Forward Pass')
-    plt.savefig("total_perturb_forward.png")
+    plt.savefig(f"total_perturb_forward_{energy_fn}_{train_mode}_{seed}.png")
     plt.close()
     if use_wandb:
-        wandb.log({"total_perturb_forward": wandb.Image("total_perturb_forward.png")})
+        wandb.log({"total_perturb_forward": wandb.Image(f"total_perturb_forward_{energy_fn}_{train_mode}_{seed}.png")})
 
     if energy_fn == 'dummy':
         #RMSD between generated conformers and ground truth conformers
@@ -679,84 +681,83 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
     
 
     # heatmap of energy/learned logpts
-    if smi is not None:   
-        for batch_ix, batch in enumerate(tqdm(train_loader, total=len(train_loader))):  # Here, loader is used to go through smiles. But in our case, we are going to focus only on one smiles
-            assert len(batch) == 1
-            if batch.canonical_smi[0] == smi:
-                break 
-        data = batch[0]
-        num_torsion_angles = len(data.mask_rotate)
-        perturbs = perturbs[0].reshape(-1, num_torsion_angles)
-        for (ix0, ix1) in [(0,1), (1,2), (0,2)]:
-            _,  logpTs_ode = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = True, num_trajs = None)
-            energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = False, num_trajs = num_trajs )
-            energy_landscape, logpTs, logpTs_ode = np.array(energy_landscape), np.array(logpTs), np.array(logpTs_ode)
-            plt.figure()
-            plt.imshow(energy_landscape, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(energy_landscape), vmax=np.max(energy_landscape))
-            plt.colorbar(label='Energy')
-            plt.xlabel('Theta0')
-            plt.ylabel('Theta1')
-            plt.title("Energy Landscape")
-            plt.savefig("energy_landscape.png")
-            plt.close()
-            
-            plt.figure()
-            plt.imshow(logpTs , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
-            plt.colorbar(label='logpTs')
-            plt.xlabel('Theta0')
-            plt.ylabel('Theta1')
-            plt.title("logpTs")
-            plt.savefig("logpTs.png")
-            plt.close()
+    
+    for batch_ix, batch in enumerate(tqdm(train_loader, total=len(train_loader))):  # Here, loader is used to go through smiles. But in our case, we are going to focus only on one smiles
+        assert len(batch) == 1
+        if batch.canonical_smi[0] == smi:
+            break 
+    data = batch[0]
+    num_torsion_angles = len(data.mask_rotate)
+    perturbs = perturbs[0].reshape(-1, num_torsion_angles)
+    for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
+        _,  logpTs_ode = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = True, num_trajs = None)
+        energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = False, num_trajs = num_trajs )
+        energy_landscape, logpTs, logpTs_ode = np.array(energy_landscape), np.array(logpTs), np.array(logpTs_ode)
+        plt.figure()
+        plt.imshow(energy_landscape, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(energy_landscape), vmax=np.max(energy_landscape))
+        plt.colorbar(label='Energy')
+        plt.xlabel(f'Theta{ix0}')
+        plt.ylabel(f'Theta{ix1}')
+        plt.title("Energy Landscape")
+        plt.savefig(f"energy_landscape_{energy_fn}_{train_mode}_{seed}.png")
+        plt.close()
+        
+        plt.figure()
+        plt.imshow(logpTs , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
+        plt.colorbar(label='logpTs')
+        plt.xlabel(f'Theta{ix0}')
+        plt.ylabel(f'Theta{ix1}')
+        plt.title("logpTs")
+        plt.savefig(f"logpTs_{energy_fn}_{train_mode}_{seed}.png")
+        plt.close()
 
-            plt.figure()
-            plt.imshow(logpTs_ode , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
-            plt.colorbar(label='logpTs_ode')
-            plt.xlabel('Theta0')
-            plt.ylabel('Theta1')
-            plt.title("logpTs_ode")
-            plt.savefig("logpTs_ode.png")
-            plt.close()
+        plt.figure()
+        plt.imshow(logpTs_ode , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
+        plt.colorbar(label='logpTs_ode')
+        plt.xlabel(f'Theta{ix0}')
+        plt.ylabel(f'Theta{ix1}')
+        plt.title("logpTs_ode")
+        plt.savefig(f"logpTs_ode_{energy_fn}_{train_mode}_{seed}.png")
+        plt.close()
 
-            #plot samples from gflownet
-            plt.figure()
-            theta0, theta1 = perturbs[:,ix0]%(2*np.pi) , perturbs[:,ix1]%(2*np.pi)
-            plt.xlim(0, 2*np.pi)
-            plt.ylim(0, 2*np.pi)
-            plt.scatter(theta0, theta1, c='r', s=15, alpha = 0.25)
-            if energy_fn == 'dummy':
-                # plot the ground truth torsion angles from dummy data
-                dummy_data = pickle.load(open(dummy_data_pkl, 'rb'))
-                gt_total_perturb = Batch.from_data_list(dummy_data).total_perturb.reshape(-1, num_torsion_angles)
-                gt_theta0, gt_theta1 = gt_total_perturb[:,ix0]%(2*np.pi) , gt_total_perturb[:,ix1]%(2*np.pi)
-                print('gt_theta0', gt_theta0, 'gt_theta1', gt_theta1)
-                plt.scatter(gt_theta0, gt_theta1, c='b', s=15, alpha=0.25)
-            if ReplayBuffer is not None and len(ReplayBuffer.buffer) > 0:
-                #Plot traj[-1] in the replay buffer
-                traj_replay = ReplayBuffer.sample(min(1000, len(ReplayBuffer.buffer)))
-                traj_replay = [x[0] for x in traj_replay]
-                perturbs_replay = torch.stack([x[-1].total_perturb for x in traj_replay])
-                theta0, theta1 = perturbs_replay[:,ix0]%(2*np.pi) , perturbs_replay[:,ix1]%(2*np.pi)
-                plt.scatter(theta0, theta1, c='g', s=15, alpha=0.25)
-            plt.xlabel('Theta0')
-            plt.ylabel('Theta1')
-            plt.title('Samples')
-            plt.savefig("samples.png")
-            plt.close()
-            
+        #plot samples from gflownet/ground truth/replay buffer
+        plt.figure()
+        theta0, theta1 = perturbs[:,ix0]%(2*np.pi) , perturbs[:,ix1]%(2*np.pi)
+        plt.xlim(0, 2*np.pi)
+        plt.ylim(0, 2*np.pi)
+        plt.scatter(theta0, theta1, c='r', s=30, alpha = 0.25, marker = 'o')
+        if gt_data_path is not None:
+            # plot the ground truth torsion angles from gt_data_path
+            dummy_data = pickle.load(open(gt_data_path, 'rb'))
+            gt_total_perturb = Batch.from_data_list(dummy_data).total_perturb.reshape(-1, num_torsion_angles)
+            gt_theta0, gt_theta1 = gt_total_perturb[:,ix0]%(2*np.pi) , gt_total_perturb[:,ix1]%(2*np.pi)
+            plt.scatter(gt_theta0, gt_theta1, c='b', s=30, alpha=0.25, marker = '^')
+        if ReplayBuffer is not None and len(ReplayBuffer.buffer) > 0:
+            #Plot traj[-1] in the replay buffer
+            traj_replay = ReplayBuffer.sample(min(1000, len(ReplayBuffer.buffer)))
+            traj_replay = [x[0] for x in traj_replay]
+            perturbs_replay = torch.stack([x[-1].total_perturb for x in traj_replay])
+            theta0, theta1 = perturbs_replay[:,ix0]%(2*np.pi) , perturbs_replay[:,ix1]%(2*np.pi)
+            plt.scatter(theta0, theta1, c='g', s=30, alpha=0.25, marker = 'x')
+        plt.xlabel(f'Theta{ix0}')
+        plt.ylabel(f'Theta{ix1}')
+        plt.title('Samples')
+        plt.savefig(f"samples_{energy_fn}_{train_mode}_{seed}.png")
+        plt.close()
+        
 
-            if use_wandb:
-                wandb.log({f"energy_landscape_{ix0,ix1}":  wandb.Image("energy_landscape.png")})
-                wandb.log({f"logpts_{ix0, ix1}": wandb.Image("logpTs.png")})
-                wandb.log({f"logpts_ode_{ix0, ix1}": wandb.Image("logpTs_ode.png")})
-                wandb.log({f"samples_{ix0, ix1}": wandb.Image("samples.png")})
-
-        #Plot the evolution of the lower bound over logZ
-        logZ_hat = (torch.stack(logit_pbs) + torch.stack(logrews) - torch.stack(logit_pfs)) 
-        logZ_hat = logZ_hat.mean(dim=1)
         if use_wandb:
-            wandb.log({"logZ_hat": logZ_hat[0]})
-        return conformers_train_gen
+            wandb.log({f"energy_landscape_{ix0,ix1}":  wandb.Image(f"energy_landscape_{energy_fn}_{train_mode}_{seed}.png")})
+            wandb.log({f"logpts_{ix0, ix1}": wandb.Image(f"logpTs_{energy_fn}_{train_mode}_{seed}.png")})
+            wandb.log({f"logpts_ode_{ix0, ix1}": wandb.Image(f"logpTs_ode_{energy_fn}_{train_mode}_{seed}.png")})
+            wandb.log({f"samples_{ix0, ix1}": wandb.Image(f"samples_{energy_fn}_{train_mode}_{seed}.png")})
+
+    #Plot the evolution of the lower bound over logZ
+    logZ_hat = (torch.stack(logit_pbs) + torch.stack(logrews) - torch.stack(logit_pfs)) 
+    logZ_hat = logZ_hat.mean(dim=1)
+    if use_wandb:
+        wandb.log({"logZ_hat": logZ_hat[0]})
+    return conformers_train_gen
     
 
 def save_pickle(data, filename):

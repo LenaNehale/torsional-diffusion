@@ -12,4 +12,4 @@ module load anaconda/3
 # Activate a virtual environment, if needed:
 conda activate torsional_diffusion
 
-python train.py
+python train.py "$@"
