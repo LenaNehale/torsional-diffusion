@@ -4,12 +4,12 @@
 #SBATCH --gres=gpu:1                         
 #SBATCH --mem=32G                             
 #SBATCH --time=50:00:00                        
-#SBATCH --output=job_output%j.txt
-#SBATCH --error=job_error%j.txt
+#SBATCH --output=jobs/job_output%j.txt
+#SBATCH --error=jobs/job_error%j.txt
 # Load the necessary modules
 module load anaconda/3 
 
 # Activate a virtual environment, if needed:
 conda activate torsional_diffusion
 
-python train.py "$@"
+py-spy record -o profile.svg -- python train.py "$@"

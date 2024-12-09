@@ -8,7 +8,7 @@ from utils.training import train_epoch, test_epoch
 from gflownet.gfn_train import gfn_sgd, log_gfn_metrics, get_gt_score, ReplayBufferClass
 from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
 from utils.boltzmann import BoltzmannResampler
-from argparse import Namespace
+from argparse import Namespace 
 import copy 
 import wandb
 
@@ -37,17 +37,23 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
     print("Starting training (not boltzmann)...")
     for epoch in range(args.n_epochs):
-        #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
-        ReplayBuffer = None
+        ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
+        #ReplayBuffer = None
         seed_everything(args.seed)
         if args.use_wandb:
             wandb.login()
             run = wandb.init(project="gfn_torsional_diff")
-            run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_{args.smi}"
-        conformers_train_gen = log_gfn_metrics(model, train_loader, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp,  max_batches=1, smi = args.smi, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
+            for smi_ix, gt_batch in enumerate(tqdm(train_loader, total=len(train_loader))):  # Here, loader is used to go through smiles. But in our case, we are going to focus only on one smiles
+                assert len(gt_batch) == 1
+                if gt_batch.canonical_smi[0] == args.smi:
+                    break
+            num_torsion_angles = len(gt_batch[0].mask_rotate)
+            run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_smi_{smi_ix}_n_{num_torsion_angles}_p_replay_{args.p_replay}"
+        if args.log_gfn_metrics:
+            log_gfn_metrics(model, train_loader, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp,  max_batches=1, smi = args.smi, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
         #score = get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
         for _ in tqdm(range(args.num_sgd_steps)): 
-            results = gfn_sgd(model, train_loader, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train, max_batches=1, T=args.rew_temp, smi = args.smi, logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, gt_data_path= args.gt_data_path)
+            results = gfn_sgd(model, train_loader, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train, max_batches=1, T=args.rew_temp, smi = args.smi, logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, gt_data_path= args.gt_data_path, p_expl = args.p_expl, p_replay = args.p_replay)
         print("Epoch {}: Training Loss {}".format(epoch, results[0]))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 

@@ -83,7 +83,10 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
         logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
         logit_pf, logit_pb = logit_pf.reshape( -1, num_trajs), logit_pb.reshape( -1, num_trajs)      
         logp = torch.logsumexp(logit_pf - logit_pb, dim = -1)
-    return logp, traj
+        #Empty Cuda memory
+        del logit_pf, logit_pb
+        torch.cuda.empty_cache()
+    return logp
  
     
 def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs):
@@ -124,16 +127,16 @@ def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device,
             mol = pyg_to_mol(data0.mol, data0, mmff=False, rmsd=True, copy=True)
             datas[-1].append(copy.deepcopy(data0))
             if energy_fn == "mmff":
-                energy_landscape[-1].append(50 * np.log(mmff_energy(mol)).item())
+                energy_landscape[-1].append(50 * np.log(100 + mmff_energy(mol)).item())
             elif energy_fn == 'dummy':
                 energy_landscape[-1].append( - get_dummy_logrew(data0.total_perturb, 1).item())
-        logpT, trajs_ode = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device, ode, num_trajs)
+        logpT = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device, ode, num_trajs)
         logpT = logpT.tolist()
         logpTs.append(logpT)
     return energy_landscape, logpTs
 
 
-def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, noise_scale = 1):
+def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, p_expl):
     '''
     Sample forward trajectories.
     Args:
@@ -160,8 +163,12 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         with torch.no_grad() if not train else contextlib.nullcontext():
             data_gpu = model(data_gpu)
         g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
-        z = torch.normal(mean=0, std=1, size=data_gpu.edge_pred.shape)
+        z = torch.normal(mean=0, std=1, size=data_gpu.edge_pred.shape) 
         score = data_gpu.edge_pred.cpu()        
+        if train and random.random() < p_expl:
+            noise_scale = 5 # Set to a higher value for more noise (hence more exploration)
+        else:
+            noise_scale = 1
         perturb = g**2 * eps * score + noise_scale * g * np.sqrt(eps) * z
         new_pos = perturb_batch(data, perturb) 
         data.pos = new_pos 
@@ -254,7 +261,7 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
     logit_pb = reduce(logit_pb, "bs steps-> bs", "sum")
     
     if likelihood:
-        logp, trajs_ode = get_logpT(traj[-1].to_data_list(), model, sigma_min, sigma_max,  steps, ode = False)
+        logp = get_logpT(traj[-1].to_data_list(), model, sigma_min, sigma_max,  steps, ode = False)
         print('Correlation(logit_pf - logit_pb,logp )', torch.corrcoef(torch.stack([logit_pf - logit_pb, logp]))[0,1])
     else:
         logp = None
@@ -305,7 +312,7 @@ def get_loss(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False
     except:
         raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
     if energy_fn == "mmff":
-        logrews = - 50 * torch.log(torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])) / T
+        logrews = - 50 * torch.log(100 + torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])) / T
     elif energy_fn == 'dummy':        
         total_perturb = traj[-1].total_perturb 
         logrews = get_dummy_logrew(total_perturb, bs)
@@ -345,7 +352,7 @@ def vargrad_loss_gradacc(traj, model, device, sigma_min, sigma_max,  steps, like
         raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
     # Computing logrews
     if energy_fn == "mmff":
-        logrews = - 50 * torch.log(torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])) / T
+        logrews = - 50 * torch.log(100 + torch.Tensor([mmff_energy(pyg_to_mol(data.mol[i], data[i])) for i in range(bs)])) / T
     elif energy_fn == 'dummy':
         total_perturb = traj[-1].total_perturb 
         logrews = get_dummy_logrew(total_perturb, bs)
@@ -478,41 +485,75 @@ class ReplayBufferClass():
     '''
     def __init__(self, max_size = 1000):
         self.max_size = max_size
-        self.datapoints = [] # list of torchgeom.data objects
-        self.logrews = torch.Tensor([])
+        self.buffer_trajs = [] # list of torchgeom.data objects
+        self.buffer_logrews = torch.Tensor([])
     def __len__(self):
-        return len(self.datapoints)
-    def update(self, trajs, logrews):
-        logrew_before_update =  torch.mean(self.logrews).item()
-        #convert each elemnt in trajs to data_list
-        trajs_list = [x.to_data_list() for x in trajs]
-        trajs_list = list(map(list, zip(*trajs_list)))
-        self.datapoints_before = copy.deepcopy(self.datapoints)
-        self.logrews_before = copy.deepcopy(self.logrews)
-        self.datapoints = self.datapoints + trajs_list 
-        self.logrews = torch.cat((self.logrews, logrews ))
+        return len(self.buffer_trajs)
+    def update(self, batch_trajs, batch_logrews):
+        print(batch_trajs, batch_logrews)
+        #transose batch_trajs
+        batch_trajs = [x.to_data_list() for x in batch_trajs]
+        batch_trajs = list(map(list, zip(*batch_trajs)))
+        # sort batch elements by logrew
+        ixs = torch.argsort(batch_logrews, descending = True)
+        batch_trajs = [batch_trajs[ix] for ix in ixs]
+        batch_logrews = batch_logrews[ixs]
+        #batch_logrews, batch_trajs = zip(*sorted(zip(batch_logrews, batch_trajs), reverse = True))
+        batch_trajs = list(batch_trajs)
+        batch_logrews = torch.Tensor(batch_logrews)
+        # discard all elements in batch which logrew is smaller than the smallest logrew in the buffer
+        if len(self.buffer_logrews) > 0:
+            min_logrew = self.buffer_logrews[-1]
+            ixs = torch.where(batch_logrews >= min_logrew)[0]
+            batch_trajs = [batch_trajs[ix] for ix in ixs]
+            batch_logrews = batch_logrews[ixs]
+        # Insert the batch elements in the buffer
+        self.buffer_trajs = self.buffer_trajs + batch_trajs
+        self.buffer_logrews = torch.cat((self.buffer_logrews, batch_logrews))
         # get indexes of sorted logrews
-        sorted_ixs = torch.argsort(self.logrews, descending = True)
-        self.datapoints = [self.datapoints[ix] for ix in sorted_ixs]
-        self.logrews = self.logrews[sorted_ixs]
-        if len(self.datapoints) > self.max_size:
-            self.datapoints_ = self.datapoints[:self.max_size]
-            self.logrews_ = self.logrews[:self.max_size]
-            logrew_after_update =  torch.mean(self.logrews_).item()
-            if logrew_after_update < logrew_before_update:
-                breakpoint()
-            self.datapoints = self.datapoints_
-            self.logrews = self.logrews_
+        sorted_ixs = torch.argsort(self.buffer_logrews, descending = True)
+        self.buffer_trajs = [self.buffer_trajs[ix] for ix in sorted_ixs]
+        self.buffer_logrews = self.buffer_logrews[sorted_ixs]
+        if len(self.buffer_trajs) > self.max_size:
+            self.buffer_trajs = self.buffer_trajs[:self.max_size]
+            self.buffer_logrews = self.buffer_logrews[:self.max_size]
         
-
+        assert len(self.buffer_trajs) == len(self.buffer_logrews)
+        
     def sample(self, n):
-        if len(self.datapoints)>=n:
-            ixs = np.random.choice(len(self.datapoints), n, replace=False)
-            return [self.datapoints[ix]for ix in ixs], self.logrews[ixs]
+        if len(self.buffer_trajs)>=n:
+            ixs = np.random.choice(len(self.buffer_trajs), n, replace=False)
+            trajs =  [self.buffer_trajs[ix]for ix in ixs]
+            trajs = list(map(list, zip(*trajs)))
+            trajs = [Batch.from_data_list(x) for x in trajs]
+            return trajs, self.buffer_logrews[ixs]
         else:
-            raise ValueError("Not enough elements in the buffer to sample")
+            raise ValueError(f"{n} samples requested, but only {len(self.buffer_trajs)} samples available in the buffer")
 
-def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, max_batches, smi , logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, gt_data_path):
+def concat(traj1, traj2):
+    '''
+    Concatenates 2 lists of trajectories in one.
+    '''
+    if traj1 is None:
+        return traj2
+    elif traj2 is None:
+        return traj1
+    else:
+        traj1 = [x.to_data_list() for x in traj1]
+        traj1 = list(map(list, zip(*traj1))) 
+        traj2 = [x.to_data_list() for x in traj2]
+        traj2 = list(map(list, zip(*traj2)))
+        traj = traj1 + traj2
+        traj = list(map(list, zip(*traj)))
+        traj = [Batch.from_data_list(x) for x in traj]
+        return traj
+
+    
+    
+    
+
+
+def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, max_batches, smi , logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, gt_data_path, p_expl, p_replay):
     if train:
         model.train() # set model to training mode
     loss_tot = 0
@@ -542,20 +583,24 @@ def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, trai
         samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
         data = Batch.from_data_list(samples)
         conformers_noise.append(samples)
-        noise_scale = 1 # Set to a higher value for more noise (similar to 'epsilon-greedy' for discrete gfns)
-        traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device, noise_scale)
+        traj = sample_forward_trajs(samples, model, train, sigma_min, sigma_max,  steps, device, p_expl)
         
         if train and ReplayBuffer is not None:
             if len(ReplayBuffer) > int(batch_size*0.5): 
-                traj_replay, logrew_replay = ReplayBuffer.sample(int(batch_size*0.5))
+                traj_replay, logrew_replay = ReplayBuffer.sample(int(batch_size*p_replay))
+        else:
+            traj_replay = None
+        
+        traj_concat = concat(traj, traj_replay) 
             
-        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj , model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
+        confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj_concat , model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
        #num_torsion_angles = len(data.mask_rotate[0])
         #print('total perturb mean', traj[-1].total_perturb.reshape(-1,num_torsion_angles).mean(axis = 0))
         if ReplayBuffer is not None:
-            ReplayBuffer.update(traj, logrew)
+            ReplayBuffer.update(traj, logrew[:len(traj[0])])
+            print('ReplayBuffer mean logrew', torch.mean(ReplayBuffer.buffer_logrews).item())
             if use_wandb:
-                wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.logrews).item()})
+                wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.buffer_logrews).item()})
 
         total_perturbs.append(traj[-1].total_perturb ) 
     elif train_mode == 'off_policy': 
@@ -637,11 +682,21 @@ def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, trai
 
 
 def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, batch_size, T, max_batches , smi , num_points , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, gt_data_path, seed):
+    # Create a folder img
+    if not os.path.exists('img'):
+        os.makedirs('img')
     assert smi is not None
+    for smi_ix, gt_batch in enumerate(tqdm(train_loader, total=len(train_loader))):  # Here, loader is used to go through smiles. But in our case, we are going to focus only on one smiles
+        assert len(gt_batch) == 1
+        if gt_batch.canonical_smi[0] == smi:
+            break
+    num_torsion_angles = len(gt_batch[0].mask_rotate)
     #Sanity check : the backward pass samples torsion angles in the uniform distribution
     if gt_data_path is not None:
+        
         dummy_data = pickle.load(open(gt_data_path, 'rb'))
         dummy_data_batch = random.sample(dummy_data, 16)
+        '''
         back_trajs = sample_backward_trajs(dummy_data_batch, sigma_min, sigma_max,  steps)
         s0 = back_trajs[0].total_perturb.reshape(-1, len(dummy_data_batch[0].mask_rotate))
         plt.figure()
@@ -651,16 +706,17 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
         plt.xlabel('Theta0')
         plt.ylabel('Theta1')
         plt.title('s0')
-        plt.savefig(f"s0_{energy_fn}_{train_mode}_{seed}.png")
+        plt.savefig(f"img/s0_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
         plt.close()
         if use_wandb:
-            wandb.log({"s0":  wandb.Image(f"s0_{energy_fn}_{train_mode}_{seed}.png")})
+            wandb.log({"s0":  wandb.Image(f"img/s0_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
+        '''
     
         #Diffusion loss
         train_loss_diffusion = get_loss_diffusion(model, gt_data_path, sigma_min, sigma_max, smi, device, train = False, use_wandb = use_wandb)
         
     #vargrad loss
-    train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, batch_size = batch_size, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='on_policy', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, gt_data_path = gt_data_path)
+    train_loss, conformers_train_noise, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, train_loader, optimizer, device,  sigma_min, sigma_max, steps, train=False, max_batches=max_batches, batch_size = batch_size, T=T, smi = smi, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='on_policy', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, gt_data_path = gt_data_path, p_expl = 0, p_replay = 0)
     if use_wandb:
         wandb.log({"vargrad loss": train_loss})
     # Plot evolution of total_perturb in forward pass
@@ -672,10 +728,10 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
     plt.xlabel('Timestep')
     plt.ylabel('Total Perturb')
     plt.title('Total Perturbations in Forward Pass')
-    plt.savefig(f"total_perturb_forward_{energy_fn}_{train_mode}_{seed}.png")
+    plt.savefig(f"img/total_perturb_forward_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
     plt.close()
     if use_wandb:
-        wandb.log({"total_perturb_forward": wandb.Image(f"total_perturb_forward_{energy_fn}_{train_mode}_{seed}.png")})
+        wandb.log({"total_perturb_forward": wandb.Image(f"img/total_perturb_forward_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
 
     if gt_data_path is not None:
         #RMSD between generated conformers and ground truth conformers
@@ -692,26 +748,24 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
             wandb.log({"RMSDs gen/ground truth": np.mean(rmsds).item()})
     
 
-    # heatmap of energy/learned logpts
-    
-    for batch_ix, batch in enumerate(tqdm(train_loader, total=len(train_loader))):  # Here, loader is used to go through smiles. But in our case, we are going to focus only on one smiles
-        assert len(batch) == 1
-        if batch.canonical_smi[0] == smi:
-            break 
-    data = batch[0]
-    num_torsion_angles = len(data.mask_rotate)
+    # heatmap of energy/learned logpts 
+    data = gt_batch[0]
     perturbs = perturbs[0].reshape(-1, num_torsion_angles)
-    for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
-        _,  logpTs_ode = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = True, num_trajs = None)
+    #for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
+    energies_off_policy = []
+    logpTs_off_policy = []
+    for ix0, ix1 in itertools.combinations(range(3), 2):
+        #_,  logpTs_ode = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = True, num_trajs = None)
         energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points=num_points, ix0=ix0, ix1=ix1, energy_fn = energy_fn, ode = False, num_trajs = num_trajs )
-        energy_landscape, logpTs, logpTs_ode = np.array(energy_landscape), np.array(logpTs), np.array(logpTs_ode)
+        energy_landscape, logpTs = np.array(energy_landscape), np.array(logpTs)
+        #logpTs_ode = np.array(logpTs_ode)
         plt.figure()
         plt.imshow(energy_landscape, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(energy_landscape), vmax=np.max(energy_landscape))
         plt.colorbar(label='Energy')
         plt.xlabel(f'Theta{ix0}')
         plt.ylabel(f'Theta{ix1}')
         plt.title("Energy Landscape")
-        plt.savefig(f"energy_landscape_{energy_fn}_{train_mode}_{seed}.png")
+        plt.savefig(f"img/energy_landscape_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
         plt.close()
         
         plt.figure()
@@ -720,17 +774,22 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
         plt.xlabel(f'Theta{ix0}')
         plt.ylabel(f'Theta{ix1}')
         plt.title("logpTs")
-        plt.savefig(f"logpTs_{energy_fn}_{train_mode}_{seed}.png")
+        plt.savefig(f"img/logpTs_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
         plt.close()
 
+        '''
         plt.figure()
         plt.imshow(logpTs_ode , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
         plt.colorbar(label='logpTs_ode')
         plt.xlabel(f'Theta{ix0}')
         plt.ylabel(f'Theta{ix1}')
         plt.title("logpTs_ode")
-        plt.savefig(f"logpTs_ode_{energy_fn}_{train_mode}_{seed}.png")
+        plt.savefig(f"img/logpTs_ode_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
         plt.close()
+        '''
+
+        energies_off_policy.append(energy_landscape)
+        logpTs_off_policy.append(logpTs)
 
         #plot samples from gflownet/ground truth/replay buffer
         plt.figure()
@@ -747,29 +806,61 @@ def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max
         if ReplayBuffer is not None and len(ReplayBuffer) > 0:
             #Plot traj[-1] in the replay buffer
             traj_replay, _ = ReplayBuffer.sample(min(ReplayBuffer.max_size, len(ReplayBuffer)))
-            perturbs_replay = torch.stack([x[-1].total_perturb for x in traj_replay])
+            perturbs_replay = traj_replay[-1].total_perturb.reshape(-1, num_torsion_angles)
             theta0replay, theta1replay = perturbs_replay[:,ix0]%(2*np.pi) , perturbs_replay[:,ix1]%(2*np.pi)
             plt.scatter(theta0replay, theta1replay, c='g', s=30, alpha=0.25, marker = 'x')
         plt.xlabel(f'Theta{ix0}')
         plt.ylabel(f'Theta{ix1}')
         plt.title('Samples')
-        plt.savefig(f"samples_{energy_fn}_{train_mode}_{seed}.png")
+        plt.savefig(f"img/samples_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
         plt.close()
         
 
         if use_wandb:
-            wandb.log({f"energy_landscape_{ix0,ix1}":  wandb.Image(f"energy_landscape_{energy_fn}_{train_mode}_{seed}.png")})
-            wandb.log({f"logpts_{ix0, ix1}": wandb.Image(f"logpTs_{energy_fn}_{train_mode}_{seed}.png")})
-            wandb.log({f"logpts_ode_{ix0, ix1}": wandb.Image(f"logpTs_ode_{energy_fn}_{train_mode}_{seed}.png")})
-            wandb.log({f"samples_{ix0, ix1}": wandb.Image(f"samples_{energy_fn}_{train_mode}_{seed}.png")})
+            wandb.log({f"energy_landscape_{ix0,ix1}":  wandb.Image(f"img/energy_landscape_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
+            wandb.log({f"logpts_{ix0, ix1}": wandb.Image(f"img/logpTs_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
+            #wandb.log({f"logpts_ode_{ix0, ix1}": wandb.Image(f"img/logpTs_ode_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
+            wandb.log({f"samples_{ix0, ix1}": wandb.Image(f"img/samples_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
 
     #Plot the evolution of the lower bound over logZ
-    logZ_hat = (torch.stack(logit_pbs) + torch.stack(logrews) - torch.stack(logit_pfs)) 
-    logZ_hat = logZ_hat.mean(dim=1)
+    logZ_hat = torch.logsumexp(torch.stack(logit_pbs) + torch.stack(logrews) - torch.stack(logit_pfs), dim = 1)
     if use_wandb:
         wandb.log({"logZ_hat": logZ_hat[0]})
-    return conformers_train_gen
+
+
     
+    
+    k = 60 # base value 60
+    logrews_on_policy = logrews[0].cpu().detach().numpy()[:k]
+    logpTs_on_policy = get_logpT(Batch.to_data_list(trajs[-1])[:k], model.to(device), sigma_min, sigma_max,  steps, device, ode=False, num_trajs = 8)
+    correlation = np.corrcoef(logrews_on_policy, logpTs_on_policy)[0, 1].item()
+    if use_wandb:
+        wandb.log({f"correlation_logrew_logpTs_on_policy": correlation})    
+    plt.figure()
+    plt.scatter(logrews_on_policy, logpTs_on_policy, c='r', s=15)
+    plt.xlabel('logrews')
+    plt.ylabel('logpTs')
+    plt.title('Scatter plot of logrews and logpTs on-policy')
+    plt.savefig(f"img/scatter_logrew_logpTs_on_policy_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
+    plt.close()
+    if use_wandb:
+        wandb.log({f"scatter_logrew_logpTs_on_policy": wandb.Image(f"img/scatter_logrew_logpTs_on_policy_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
+    # Scatter plot of logrews and logpTs
+    logrews_off_policy = - np.stack(energies_off_policy).flatten()
+    logpTs_off_policy = np.stack(logpTs_off_policy).flatten()
+    logrews = np.concatenate((logrews_on_policy, logrews_off_policy))
+    logpTs = np.concatenate((np.array(logpTs_on_policy), logpTs_off_policy))
+    plt.figure()
+    plt.scatter(logrews, logpTs, c='b', s=15)
+    plt.xlabel('logrews')
+    plt.ylabel('logpTs')
+    plt.title('Scatter plot of logrews and logpTs')
+    plt.savefig(f"img/scatter_logrew_logpTs_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")
+    plt.close()
+    if use_wandb:
+        wandb.log({f"scatter_logrew_logpTs": wandb.Image(f"img/scatter_logrew_logpTs_{energy_fn}_{train_mode}_{seed}_smi_{smi_ix}_n_{num_torsion_angles}.png")})
+    
+        
 
 def save_pickle(data, filename):
     with open(filename, "wb") as f:
