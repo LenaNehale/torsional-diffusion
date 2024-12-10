@@ -22,7 +22,7 @@ def parse_train_args():
 
     
     #GflowNet arguments
-    parser.add_argument('--smi', type=str, default='Brc1ccc(-c2nc(NN=Cc3cccnc3)c3ccccc3n2)cc1', help='SMILES string for which to generate conformers')
+    parser.add_argument('--smis', type=list, default=['Brc1ccc(-c2nc(NN=Cc3cccnc3)c3ccccc3n2)cc1', 'CC(=O)n1c(=O)c2ccccc2c(=O)n1-c1ccccc1', 'CC1(C)CC(=O)C2=C(C1)NC(=O)NC2c1ccc(Cl)cc1', 'O=c1oc2ccccc2cc1-c1csc(Nc2nc3ccc(F)cc3s2)n1'], help='SMILES strings for which to generate conformers')
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='on_policy', help='Training mode for GflowNets')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
@@ -31,10 +31,10 @@ def parse_train_args():
     parser.add_argument('--logrew_clamp', type=float, default=-100000, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default=1, help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
-    parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
-    parser.add_argument('--batch_size_eval', type=int, default=512, help='Batch size for evaluation')
-    parser.add_argument('--num_sgd_steps', type=int, default=1024, help='Number of SGD steps for one epoch')
-    parser.add_argument('--num_points', type=int, default=20, help='Number of points for evaluation')
+    parser.add_argument('--batch_size_train', type=int, default=4, help='Batch size for training')
+    parser.add_argument('--batch_size_eval', type=int, default=128, help='Batch size for evaluation')
+    parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
+    parser.add_argument('--num_points', type=int, default=10, help='Number of points for evaluation')
     parser.add_argument('--num_trajs', type=int, default=16, help='Number of backward trajectories for computing logpT')
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
 
