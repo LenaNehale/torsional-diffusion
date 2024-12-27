@@ -15,7 +15,6 @@ from utils.dataset import ConformerDataset
 from utils.featurization import drugs_types
 from torch_geometric.data import Data, Batch 
 
-
 from rdkit.Chem import rdMolAlign
 from utils.standardization import fast_rmsd
 import pickle
@@ -40,6 +39,8 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
     - sigma_min, sigma_max: noise variance at timesetps (0,T)
     - steps: number of timesteps
     - device: cuda or cpu
+    - ode: whether to use the reverse ODE or not
+    - num_trajs: number of backward trajectories to sample
     Returns:
     - logp: log-likelihood of conformers under the model
     '''
@@ -89,7 +90,7 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
     return logp
  
     
-def get_2dheatmap_array_and_pt(data,model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs):
+def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs):
     '''
     Get 2Denergy heatmap and logpT heatmap. Both are obtained by computing the energy for different values (linspace) of the 2 torsion angles ix0 and ix1, while fixing the other torsion angles.
     Args:
@@ -696,8 +697,6 @@ def gfn_sgd(model, loader, optimizer, device,  sigma_min, sigma_max, steps, trai
 
 
 def log_gfn_metrics(model, train_loader, optimizer, device, sigma_min, sigma_max, steps, batch_size, T , smis , num_points , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, gt_data_path, seed):
-    
-
     # Save the current model in a folder model_chkpts
     if not os.path.exists('model_chkpts'):
         os.makedirs('model_chkpts')

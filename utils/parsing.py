@@ -22,7 +22,7 @@ def parse_train_args():
 
     
     #GflowNet arguments
-    parser.add_argument('--smis', type=list, default=['Brc1ccc(-c2nc(NN=Cc3cccnc3)c3ccccc3n2)cc1', 'CC(=O)n1c(=O)c2ccccc2c(=O)n1-c1ccccc1', 'CC1(C)CC(=O)C2=C(C1)NC(=O)NC2c1ccc(Cl)cc1', 'O=c1oc2ccccc2cc1-c1csc(Nc2nc3ccc(F)cc3s2)n1'], help='SMILES strings for which to generate conformers')
+    parser.add_argument('--smis', type=list, default=  ['CC(=O)n1c(=O)c2ccccc2c(=O)n1-c1ccccc1','CC1(C)CC(=O)C2=C(C1)NC(=O)NC2c1ccc(Cl)cc1','O=c1oc2ccccc2cc1-c1csc(Nc2nc3ccc(F)cc3s2)n1','CC(C)N1CC[NH2+]CC1','Brc1ccc(COc2ncnc3ccccc23)cc1'], help='SMILES strings for which to generate conformers')
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='on_policy', help='Training mode for GflowNets')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
