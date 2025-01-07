@@ -233,7 +233,7 @@ def pyg_to_mol(mol, data, mmff=False, rmsd=True, copy=True):
         mol.AddConformer(conformer)
     coords = data.pos
     if type(coords) is not np.ndarray:
-        coords = coords.double().numpy()
+        coords = coords.double().cpu().numpy()
     for i in range(coords.shape[0]):
         #mol.GetConformer(0).SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))
         mol.GetConformer().SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))

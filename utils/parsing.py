@@ -22,19 +22,21 @@ def parse_train_args():
 
     
     #GflowNet arguments
-    parser.add_argument('--smis', type=list, default=  ['CC(=O)n1c(=O)c2ccccc2c(=O)n1-c1ccccc1','CC1(C)CC(=O)C2=C(C1)NC(=O)NC2c1ccc(Cl)cc1','O=c1oc2ccccc2cc1-c1csc(Nc2nc3ccc(F)cc3s2)n1','CC(C)N1CC[NH2+]CC1','Brc1ccc(COc2ncnc3ccccc23)cc1'], help='SMILES strings for which to generate conformers')
+    #parser.add_argument('--smis', type=list, default=  ['CC(=O)n1c(=O)c2ccccc2c(=O)n1-c1ccccc1','CC1(C)CC(=O)C2=C(C1)NC(=O)NC2c1ccc(Cl)cc1','O=c1oc2ccccc2cc1-c1csc(Nc2nc3ccc(F)cc3s2)n1','CC(C)N1CC[NH2+]CC1','Brc1ccc(COc2ncnc3ccccc23)cc1'], help='SMILES strings for which to generate conformers')
+    parser.add_argument('--smis', type=list, default=  None, help='SMILES strings for which to generate conformers')
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='on_policy', help='Training mode for GflowNets')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
     parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
-    parser.add_argument('--energy_fn', type=str, default='dummy', help='Energy function for GflowNets')
+    parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-100000, help='Clamping value for log rewards')
-    parser.add_argument('--rew_temp', type=float, default=1, help='Temperature for rewards')
+    parser.add_argument('--rew_temp', type=float, default=32, help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
     parser.add_argument('--batch_size_train', type=int, default=4, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=128, help='Batch size for evaluation')
+    parser.add_argument('--n_smis_batch', type=int, default=5, help='Number of SMILES strings per batch')
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
-    parser.add_argument('--num_points', type=int, default=10, help='Number of points for evaluation')
+    parser.add_argument('--num_points', type=int, default=20, help='Number of points for evaluation')
     parser.add_argument('--num_trajs', type=int, default=16, help='Number of backward trajectories for computing logpT')
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
 
@@ -52,7 +54,7 @@ def parse_train_args():
     parser.add_argument('--scheduler_patience', type=int, default=20, help='Patience of plateau scheduler')
     parser.add_argument('--sigma_min', type=float, default=0.01*3.14, help='Minimum sigma used for training')
     parser.add_argument('--sigma_max', type=float, default=3.14, help='Maximum sigma used for training')
-    parser.add_argument('--limit_train_mols', type=int, default=0, help='Limit to the number of molecules in dataset, 0 uses them all')
+    parser.add_argument('--limit_train_mols', type=int, default=5, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--boltzmann_weight', action='store_true', default=True, help='Whether to sample conformers based on B.w.')
 
     # Feature arguments

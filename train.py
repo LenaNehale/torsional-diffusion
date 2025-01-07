@@ -1,11 +1,13 @@
 import math, os, torch, yaml
+from torch.utils.data import Subset
 torch.multiprocessing.set_sharing_strategy('file_system')
 import numpy as np
 from rdkit import RDLogger
 from utils.dataset import construct_loader
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
-from gflownet.gfn_train import gfn_sgd, log_gfn_metrics, get_gt_score, ReplayBufferClass
+from gflownet.gfn_train import gfn_sgd 
+from gflownet.gfn_metrics import log_gfn_metrics
 from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
 from utils.boltzmann import BoltzmannResampler
 from argparse import Namespace 
@@ -35,20 +37,37 @@ def seed_everything(seed: int):
 
 def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
-    print("Starting training (not boltzmann)...")
+    print('Set up replay buffer, seed and Wandb')
+     #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
+    ReplayBuffer = None
+    seed_everything(args.seed)
+    if args.use_wandb:
+        wandb.login()
+        run = wandb.init(project="gfn_torsional_diff")
+        run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_smi_{args.smis}_limit_train_mols_{args.limit_train_mols}"
+    print('Set up dataset')
+    if args.smis is None:
+        dataset = train_loader.dataset
+    
+    else:
+        assert len(args.smis) > args.n_smis_batch
+        ixs = []
+        for i in range(len(train_loader.dataset)):
+            if train_loader.dataset[i].canonical_smi in args.smis:
+                ixs.append(i)
+                print(i)
+        dataset = Subset(train_loader.dataset, ixs)   
+
+    print("Starting GFN training ...")
     for epoch in range(args.n_epochs):
-        #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
-        ReplayBuffer = None
-        seed_everything(args.seed)
-        if args.use_wandb:
-            wandb.login()
-            run = wandb.init(project="gfn_torsional_diff")
-            run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_smi_{args.smis}"
         if args.log_gfn_metrics:
-            log_gfn_metrics(model, train_loader, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp,  smis = args.smis, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
+            subset = Subset(dataset, list(range(5)))
+            log_gfn_metrics(model, subset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
         #score = get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
         for _ in tqdm(range(args.num_sgd_steps)): 
-            results = gfn_sgd(model, train_loader, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train,  T=args.rew_temp, smis = args.smis, logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, gt_data_path= args.gt_data_path, p_expl = args.p_expl, p_replay = args.p_replay)
+            subset_indices = np.random.choice(len(dataset), args.n_smis_batch, replace=False)
+            subset = Subset(dataset, subset_indices)
+            results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay)
         print("Epoch {}: Training Loss {}".format(epoch, results[0]))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 
