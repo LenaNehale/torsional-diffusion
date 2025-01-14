@@ -54,11 +54,11 @@ def get_distance_matrix(pyg_data, mask_edges, mask_rotate):
     return edge_distances
 
 
-def modify_conformer(pos_input, edge_index, mask_rotate, torsion_updates_input, as_numpy=False):
+def modify_conformer(pos, edge_index, mask_rotate, torsion_updates_input, as_numpy=False):
     '''
     Modifies the conformer's 3D coordinates based on the torsion updates.
     Args:
-        pos_input: (N, 3) tensor of 3D coordinates
+        pos: (N, 3) tensor of 3D coordinates
         edge_index: (E, 2) tensor of edge indices
         mask_rotate: (E, N) tensor of boolean masks indicating which atoms are rotated by each edge
         torsion_updates_input: (E,) tensor of torsion updates
@@ -66,7 +66,6 @@ def modify_conformer(pos_input, edge_index, mask_rotate, torsion_updates_input, 
     Returns:
         pos: (N, 3) tensor of modified 3D coordinates
     '''
-    pos = copy.deepcopy(pos_input)
     if type(pos) != np.ndarray: pos = pos.cpu().numpy()
     if type(torsion_updates_input) != np.ndarray: 
         torsion_updates = copy.deepcopy(torsion_updates_input.detach()).cpu().numpy()

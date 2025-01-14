@@ -7,7 +7,7 @@ from utils.dataset import construct_loader
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
 from gflownet.gfn_train import gfn_sgd 
-from gflownet.gfn_metrics import log_gfn_metrics
+from gflownet.gfn_metrics import log_gfn_metrics, log_gfn_metrics_cond
 from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
 from utils.boltzmann import BoltzmannResampler
 from argparse import Namespace 
@@ -60,15 +60,17 @@ def train(args, model, optimizer, scheduler, train_loader, val_loader):
 
     print("Starting GFN training ...")
     for epoch in range(args.n_epochs):
+        
         if args.log_gfn_metrics:
-            subset = Subset(dataset, list(range(5)))
+            subset = Subset(dataset, list(range(5)) + [len(dataset) - i - 1 for i in range(5)] ) # val subset
             log_gfn_metrics(model, subset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
+            log_gfn_metrics_cond(model, dataset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, args.n_smis_batch, args.batch_size_eval, args.rew_temp  ,  args.logrew_clamp, args.energy_fn,  args.num_trajs, args.use_wandb, ReplayBuffer, args.train_mode, args.seed)
         #score = get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
         for _ in tqdm(range(args.num_sgd_steps)): 
-            subset_indices = np.random.choice(len(dataset), args.n_smis_batch, replace=False)
+            subset_indices = np.random.choice(int(len(dataset)*0.8), args.n_smis_batch, replace=False)
             subset = Subset(dataset, subset_indices)
-            results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay)
-        print("Epoch {}: Training Loss {}".format(epoch, results[0]))
+            results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
+        print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 
         print("Epoch {}: Validation Loss {} base loss {}".format(epoch, val_loss, base_val_loss))

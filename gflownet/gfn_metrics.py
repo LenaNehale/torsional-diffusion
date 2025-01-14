@@ -1,65 +1,9 @@
 from gflownet.gfn_train import * 
+from torch.utils.data import Subset
 
 
 
 
-def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = True, num_trajs = 10):
-    '''
-    Computes the log-likelihood of conformers using the reverse ODE (data -> noise)
-    Args:
-    - conformers: list of pytorch geometric data objects representing conformers
-    - model: score model
-    - sigma_min, sigma_max: noise variance at timesetps (0,T)
-    - steps: number of timesteps
-    - device: cuda or cpu
-    - ode: whether to use the reverse ODE or not
-    - num_trajs: number of backward trajectories to sample
-    Returns:
-    - logp: log-likelihood of conformers under the model
-    '''
-
-    if ode: 
-        sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)
-        eps = 1 / steps
-        data = copy.deepcopy(Batch.from_data_list(conformers))
-        bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
-        logp = torch.zeros(bs)
-        #data.total_perturb = torch.zeros(bs * n_torsion_angles)
-        data_gpu = copy.deepcopy(data).to(device)
-        mols = [[pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))]] # viz molecules trajs during denoising
-        traj = [copy.deepcopy(data)]
-        for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
-            data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
-            with torch.no_grad():
-                data_gpu = model(data_gpu)
-            ## apply reverse ODE perturbation 
-            g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
-            score = data_gpu.edge_pred.cpu()
-            perturb =  - 0.5 * g ** 2 * eps * score # minus is because we are going backwards
-            new_pos = perturb_batch(data, perturb)
-            data.pos = new_pos
-            data.total_perturb = (data.total_perturb + perturb ) % (2 * np.pi)
-            mols.append([pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))])
-            #data = copy.deepcopy(conf_dataset_likelihood.data) 
-            data_gpu.pos =  data.pos.to(device) # has 2 more attributes than data: edge_pred and edge_sigma
-            div = divergence(model, data, data_gpu, method='full') 
-            logp += -0.5 * g ** 2 * eps * div
-            data_gpu.pos = data.pos.to(device)
-            traj.append(copy.deepcopy(data))
-        # Get rmsds of noised conformers compared to traj[-1]
-        #rmsds = [get_rmsds(mols[i], mols[-1]) for i in range(len(mols))]
-        #print('RMSDs(mols[t], mols[0]) for t in [0, T]', [np.mean(r) for r in rmsds])
-
-    else:
-        conformers = [ x for x in conformers for _ in range(num_trajs)]
-        traj = sample_backward_trajs(conformers, sigma_min, sigma_max,  steps)
-        logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
-        logit_pf, logit_pb = logit_pf.reshape( -1, num_trajs), logit_pb.reshape( -1, num_trajs)      
-        logp = torch.logsumexp(logit_pf - logit_pb, dim = -1)
-        #Empty Cuda memory
-        del logit_pf, logit_pb
-        torch.cuda.empty_cache()
-    return logp
  
     
 def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs, T = 1.0, get_pt = True):
@@ -120,7 +64,7 @@ def get_rmsds(mols0, mols1):
 
 
 def get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5):
-    gt_data = Batch.from_data_list(pickle.load(open( gt_data_path , 'rb'))).to(device)
+    gt_data = Batch.from_data_list(pickle.load(open( gt_data_path , 'rb'))).to(device) 
     torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points)
     num_torsion_angles = len(gt_data.mask_rotate[0])
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
@@ -156,9 +100,9 @@ def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, ste
     torch.save(model.state_dict(), f'model_chkpts/model_{energy_fn}_{train_mode}_{seed}.pt')
 
     #vargrad loss
-    train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='on_policy', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0)
+    train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0, grad_acc = False)
     if use_wandb:
-        wandb.log({"vargrad loss": train_loss})
+        wandb.log({"vargrad loss": torch.mean(train_loss)})
 
     # Create a folder img
     if not os.path.exists('img'):
@@ -232,7 +176,7 @@ def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, ste
             theta0, theta1 = perturbs[l].reshape(-1, num_torsion_angles)[:, ix0] % (2 * np.pi), perturbs[l].reshape(-1, num_torsion_angles)[:, ix1] % (2 * np.pi)
             ax.set_xlim(0, 2 * np.pi)
             ax.set_ylim(0, 2 * np.pi)
-            ax.scatter(theta0, theta1, c='r', s=30, alpha=0.25, marker='o')
+            ax.scatter(theta0.to('cpu'), theta1.to('cpu'), c='r', s=30, alpha=0.25, marker='o')
             ax.set_xlabel(f'Theta{ix0}')
             ax.set_ylabel(f'Theta{ix1}')
             ax.set_title("Samples")
@@ -260,16 +204,22 @@ def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, ste
                 ax.axis('off')
             elif col == 1:
                 # Scatter plot of logrews and logpTs (on-policy + off-policy, uniformly sampled on the grid )
-                k = 30 # base value 60
-                logrews_on_policy = logrews[l].cpu().detach().numpy()[:k]
+                k = 60 # base value 60
+                logrews_on_policy = logrews[l].cpu().detach().numpy()
                 logpTs_on_policy = get_logpT(Batch.to_data_list(trajs[l][-1])[:k], model.to(device), sigma_min, sigma_max,  steps, device, ode=False, num_trajs = 8)
-                correlation = np.corrcoef(logrews_on_policy, logpTs_on_policy)[0, 1].item()
+                correlation = np.corrcoef(logrews_on_policy[:k], logpTs_on_policy.cpu())[0, 1].item()
                 if use_wandb:
                     wandb.log({f"correlation_logrew_logpTs_on_policy_smi_{smi_ix}_n_{num_torsion_angles}": correlation})    
 
                 logrews_off_policy = - np.stack(energies_off_policy).flatten()
-                logrews_all = np.concatenate((logrews_on_policy, logrews_off_policy)) / T
-                logpTs = np.concatenate((np.array(logpTs_on_policy), np.stack(logpTs_off_policy).flatten()))
+                if use_wandb:
+                    wandb.log({f"logrews_off_policy_smi_{smi_ix}_n_{num_torsion_angles}": logrews_off_policy.mean(), f"logrews_on_policy_smi_{smi_ix}_n_{num_torsion_angles}": logrews_on_policy.mean()})
+
+                logrews_all = logrews_on_policy[:k] / T
+                logpTs = np.array(logpTs_on_policy.cpu())
+                #logrews_all = np.concatenate((logrews_on_policy[:k], logrews_off_policy)) / T
+                #logpTs = np.concatenate((np.array(logpTs_on_policy), np.stack(logpTs_off_policy).flatten()))
+
                 ax.scatter(logrews_all, logpTs, c='b', s=15)
                 ax.set_xlabel('logrews')
                 ax.set_ylabel('logpTs')
@@ -298,3 +248,118 @@ def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, ste
             wandb.log({f"logZ_hat_smi_{smi_ix}_n_{num_torsion_angles}": logZ})
 
 
+
+
+def log_gfn_metrics_cond(model, dataset, optimizer, device, sigma_min, sigma_max, steps, n_smis_batch, batch_size, T , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, seed):
+
+    train_losses = []
+    correlations_on_policy = []
+    avg_logrews_on_policy = []
+    avg_logrews_gt = []
+    avg_logrews_rand = []
+    logZs = []
+    logZs_mcmc = []
+
+
+    for i in tqdm(range(len(dataset) // n_smis_batch)): 
+        subset_indices = [i * n_smis_batch + j for j in range(n_smis_batch)] 
+        subset = Subset(dataset, subset_indices)
+        #train loss
+        train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, subset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0, grad_acc = False)
+        train_losses.append(train_loss)
+        #Corr(logpT, logrew). 
+        logpT = [get_logpT(x, model, sigma_min, sigma_max,  steps, device, ode=False, num_trajs = num_trajs) for x in conformers_train_gen ]
+        logpT_one_traj = logit_pfs - logit_pbs 
+        correlation = []
+        for  j in range(n_smis_batch):
+            correlation.append(np.corrcoef(logpT[j].cpu().detach().numpy(), logrews[j].cpu().detach().numpy())[0, 1])
+        correlations_on_policy.append(correlation)
+        # avg logrews on policy
+        avg_logrews_on_policy.append(reduce(logrews, 'n_smis bs -> n_smis', 'mean' ))
+        # avg logrews rand
+        conformers_train_rand = [perturb_seeds(x) for x in conformers_train_gen]
+        logrews_rand = torch.stack([get_logrew(Batch.from_data_list(x), energy_fn = energy_fn, T = T, clamp = logrew_clamp) for x in conformers_train_rand])
+        avg_logrews_rand.append(reduce(logrews_rand, 'n_smis bs -> n_smis', 'mean' ))
+        # logrews gt 
+        logrews_gt = get_logrew(Batch.from_data_list([x for x in subset]), energy_fn = energy_fn, T = T, clamp = logrew_clamp) 
+        avg_logrews_gt.append(logrews_gt)
+
+        #logZs 
+        logZ = torch.logsumexp(logit_pbs + logrews - logit_pfs, dim = 1) - np.log(len(logit_pfs[0])).item() #TODO verifier qu'on rajoute la bonne constante?
+        logZ = logZ - np.log(sigma_min).item() + np.log(sigma_max).item()
+        logZs.append(logZ)
+    
+        #logZs_mcmc
+
+    train_losses, correlations_on_policy, avg_logrews_on_policy, avg_logrews_rand, avg_logrews_gt, logZs = torch.stack(train_losses).flatten(), torch.Tensor(correlations_on_policy).flatten(), torch.stack(avg_logrews_on_policy).flatten(), torch.stack(avg_logrews_rand).flatten(), torch.stack(avg_logrews_gt).flatten(), torch.stack(logZs).flatten()
+
+
+    fig, ax = plt.subplots(2)
+    x = np.arange(len(dataset))
+    ax[0].bar(x, correlations_on_policy, color ='r', label ='correlations_on_policy') 
+    #ax[0].set_xticks(x)
+    ax[0].set_xlabel('SMILES')
+    ax[0].set_ylabel('correlation')
+    #ax[0].set_yscale('log')
+    ax[0].legend()
+
+    ax[1].bar(x, train_losses.cpu(), color ='b', label ='train_losses') 
+    #ax[1].set_xticks(x)
+    ax[1].set_xlabel('SMILES')
+    ax[1].set_ylabel('train_loss')
+    ax[1].set_yscale('log')
+    ax[1].legend()
+
+    plt.savefig(f"img/barplot_{energy_fn}_{train_mode}_{seed}.png")
+    plt.close()
+
+    fig, ax = plt.subplots(2,2)
+
+    ax[0,0].scatter(logZs.cpu(), train_losses.cpu(), c='b', s=15, marker = 'o')
+    ax[0,0].set_xlabel('logZs')
+    #ax[0,0].set_xscale('log')
+    ax[0,0].set_ylabel('train_losses')
+    ax[0,0].set_yscale('log')
+
+
+    ax[0,1].scatter(avg_logrews_rand, avg_logrews_on_policy.cpu(), c='y', s=15, marker = '^')
+    ax[0,1].set_xlabel('avg_logrews_rand')
+    #ax[0,1].set_xscale('log')
+    ax[0,1].set_ylabel('avg_logrews_on_policy')
+    #ax[0,1].set_yscale('log')
+
+    ax[1,0].scatter(train_losses.cpu(), correlations_on_policy, c='r', s=15, marker = 'x')
+    ax[1,0].set_xlabel('train_losses')
+    ax[1,0].set_xscale('log')
+    ax[1,0].set_ylabel('correlations_on_policy')
+
+    ax[1,1].scatter(avg_logrews_gt, avg_logrews_on_policy.cpu(), c='g', s=15, marker = '^')
+    ax[1,1].set_xlabel('avg_logrews_gt')
+    #ax[1,1].set_xscale('log')
+    ax[1,1].set_ylabel('avg_logrews_on_policy')
+    #ax[1,1].set_yscale('log')
+
+
+    plt.tight_layout()
+    plt.savefig(f"img/scatterplot_{energy_fn}_{train_mode}_{seed}.png")
+    plt.close()
+    
+    
+
+    
+    if use_wandb:
+        wandb.log({f"barplot_{energy_fn}_{train_mode}_{seed}": wandb.Image(f"img/barplot_{energy_fn}_{train_mode}_{seed}.png")})
+        wandb.log({f"scatterplot_{energy_fn}_{train_mode}_{seed}": wandb.Image(f"img/scatterplot_{energy_fn}_{train_mode}_{seed}.png")})
+    
+    
+    #return train_losses, correlations_on_policy, avg_logrews_on_policy, avg_logrews_rand, avg_logrews_gt, logZs
+
+        
+
+
+
+
+    
+    
+
+    
