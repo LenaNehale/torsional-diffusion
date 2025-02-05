@@ -15,7 +15,7 @@ def get_transformation_mask(pyg_data):
 
         G2 = G.to_undirected()
         G2.remove_edge(*edges[i])
-        if not nx.is_connected(G2):
+        if not nx.is_connected(G2): 
             l = list(sorted(nx.connected_components(G2), key=len)[0])
             if len(l) > 1:
                 if edges[i, 0] in l:

@@ -44,8 +44,8 @@ def parse_train_args():
 
 
     # Training arguments
-    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
-    parser.add_argument('--log_gfn_metrics', action='store_true', default=True, help='Whether to log GFN metrics')
+    parser.add_argument('--use_wandb', action='store_true', default=False, help='Whether to use wandb')
+    parser.add_argument('--log_gfn_metrics', action='store_true', default=False, help='Whether to log GFN metrics')
     parser.add_argument('--n_epochs', type=int, default=250, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')

@@ -352,7 +352,7 @@ def log_gfn_metrics_cond(model, dataset, optimizer, device, sigma_min, sigma_max
         wandb.log({f"scatterplot_{energy_fn}_{train_mode}_{seed}": wandb.Image(f"img/scatterplot_{energy_fn}_{train_mode}_{seed}.png")})
     
     
-    #return train_losses, correlations_on_policy, avg_logrews_on_policy, avg_logrews_rand, avg_logrews_gt, logZs
+    return train_losses, correlations_on_policy, avg_logrews_on_policy, avg_logrews_rand, avg_logrews_gt, logZs
 
         
 
