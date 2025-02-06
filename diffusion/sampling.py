@@ -23,7 +23,7 @@ def try_mmff(mol):
         return True
     except Exception as e:
         return False
-
+ 
 
 def get_seed(smi, seed_confs=None, dataset='drugs'):
     if seed_confs:

@@ -37,7 +37,8 @@ def one_k_encoding(value, choices):
 
     return encoding
 
-def featurize_mol(mol, types=drugs_types):
+
+def featurize_mol(mol, types=drugs_types): 
     """
     Part of the featurisation code taken from GeoMol https://github.com/PattanaikL/GeoMol
     Returns:

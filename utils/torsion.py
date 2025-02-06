@@ -6,7 +6,7 @@ from torch_geometric.utils import to_networkx
 from torch_geometric.data import Data
 
 
-def get_transformation_mask(pyg_data):
+def get_transformation_mask(pyg_data): 
     G = to_networkx(pyg_data, to_undirected=False)
     to_rotate = []
     edges = pyg_data.edge_index.T.numpy()
@@ -36,7 +36,7 @@ def get_transformation_mask(pyg_data):
             mask_rotate[idx][np.asarray(to_rotate[i], dtype=int)] = True
             idx += 1
 
-    return mask_edges, mask_rotate
+    return mask_edges, mask_rotate 
 
 
 def get_distance_matrix(pyg_data, mask_edges, mask_rotate):
