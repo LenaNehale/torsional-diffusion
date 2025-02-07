@@ -94,10 +94,7 @@ def get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix
 
 
 def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, steps, batch_size, T  , num_points , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, gt_data_path, seed):
-    # Save the current model in a folder model_chkpts
-    if not os.path.exists('model_chkpts'):
-        os.makedirs('model_chkpts')
-    torch.save(model.state_dict(), f'model_chkpts/model_{energy_fn}_{train_mode}_{seed}.pt')
+
 
     #vargrad loss
     train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0, grad_acc = False)
@@ -250,7 +247,7 @@ def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, ste
 
 
 
-def log_gfn_metrics_cond(model, dataset, optimizer, device, sigma_min, sigma_max, steps, n_smis_batch, batch_size, T , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, seed):
+def log_gfn_metrics_cond(model, dataset, optimizer, device, sigma_min, sigma_max, steps, n_smis_batch, batch_size, T , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, seed, data_name ='geomdrugs'):
 
     train_losses = []
     correlations_on_policy = []
@@ -260,10 +257,13 @@ def log_gfn_metrics_cond(model, dataset, optimizer, device, sigma_min, sigma_max
     logZs = []
     logZs_mcmc = []
 
-
+    # We cannot compute the metrics in one go for all the dataset, otherwise get memory issues. So we do it in batches
     for i in tqdm(range(len(dataset) // n_smis_batch)): 
         subset_indices = [i * n_smis_batch + j for j in range(n_smis_batch)] 
-        subset = Subset(dataset, subset_indices)
+        if data_name == 'geomdrugs': # TO DO : change, ugly
+            subset = Subset(dataset, subset_indices)
+        else:
+            subset = list(np.array(dataset)[subset_indices]) #TODO: change, reaaally ugly!
         #train loss
         train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, subset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0, grad_acc = False)
         train_losses.append(train_loss)

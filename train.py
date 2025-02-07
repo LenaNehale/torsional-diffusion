@@ -53,7 +53,7 @@ def train(args, model, optimizer, scheduler):
                     print(i)
             dataset = Subset(train_loader.dataset, ixs)   
     elif args.data_name == 'freesolv':
-        freesolv_smis = np.array(pickle.load(open("/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/freesolv_valid_smis.pkl"  ,'rb')))
+        freesolv_smis = np.array(pickle.load(open("/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/freesolv_subset_valid_smis_workshop.pkl"  ,'rb')))
     else:
         raise ValueError('Dataset not recognized!')
         
@@ -78,7 +78,7 @@ def train(args, model, optimizer, scheduler):
             log_gfn_metrics(model, subset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
             log_gfn_metrics_cond(model, dataset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, args.n_smis_batch, args.batch_size_eval, args.rew_temp  ,  args.logrew_clamp, args.energy_fn,  args.num_trajs, args.use_wandb, ReplayBuffer, args.train_mode, args.seed)
         #score = get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
-        for _ in tqdm(range(args.num_sgd_steps)): 
+        for k in tqdm(range(args.num_sgd_steps)): 
             if args.data_name == 'geomdrugs':
                 subset_indices = np.random.choice(int(len(dataset)*0.8), args.n_smis_batch, replace=False)
                 subset = Subset(dataset, subset_indices)
@@ -86,6 +86,13 @@ def train(args, model, optimizer, scheduler):
                 idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
                 subset = make_dataset_from_smi(np.array(freesolv_smis)[idx_train])
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
+            
+            if k %100 == 0:
+                # Save the current model in a folder model_chkpts
+                if not os.path.exists('model_chkpts'):
+                    os.makedirs('model_chkpts')
+                torch.save(model.state_dict(), f'model_chkpts/model_{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}.pt')
+        
         print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 
