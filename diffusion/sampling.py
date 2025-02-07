@@ -68,7 +68,8 @@ def embed_seeds(mol, data, n_confs, single_conf=False, smi=None, embed_func=None
             [seed_mol.RemoveConformer(j) for j in range(n_confs) if j != i]
 
         data_conf.pos = torch.from_numpy(seed_mol.GetConformers()[0].GetPositions()).float()
-        data_conf.seed_mol = copy.deepcopy(seed_mol)
+        #data_conf.seed_mol = copy.deepcopy(seed_mol) (original)
+        data_conf.mol = copy.deepcopy(seed_mol)
         if pdb:
             pdb.add(data_conf.pos, part=i, order=0, repeat=still_frames)
             if seed_confs:

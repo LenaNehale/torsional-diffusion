@@ -460,7 +460,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         if train_mode == 'gflownet':
             samples = [copy.deepcopy(gt_data) for _ in range(batch_size)]
             samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
-            
+
             if grad_acc:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
                 if train and ReplayBuffer is not None:
@@ -502,6 +502,8 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                 print('ReplayBuffer mean logrew', torch.mean(ReplayBuffer.buffer_logrews).item())
                 if use_wandb:
                     wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.buffer_logrews).item()})
+
+            print('loss ', loss_smile )
 
     
         

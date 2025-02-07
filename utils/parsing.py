@@ -18,6 +18,7 @@ def parse_train_args():
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
+    parser.add_argument('--data_name', type=str, default='freesolv', help='freesolv or geomdrugs')  
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
 
     
@@ -40,11 +41,11 @@ def parse_train_args():
     parser.add_argument('--num_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
     parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
-
+    
 
 
     # Training arguments
-    parser.add_argument('--use_wandb', action='store_true', default=False, help='Whether to use wandb')
+    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
     parser.add_argument('--log_gfn_metrics', action='store_true', default=False, help='Whether to log GFN metrics')
     parser.add_argument('--n_epochs', type=int, default=250, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
@@ -54,7 +55,7 @@ def parse_train_args():
     parser.add_argument('--scheduler_patience', type=int, default=20, help='Patience of plateau scheduler')
     parser.add_argument('--sigma_min', type=float, default=0.01*3.14, help='Minimum sigma used for training')
     parser.add_argument('--sigma_max', type=float, default=3.14, help='Maximum sigma used for training')
-    parser.add_argument('--limit_train_mols', type=int, default=100, help='Limit to the number of molecules in dataset, 0 uses them all')
+    parser.add_argument('--limit_train_mols', type=int, default=5, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--boltzmann_weight', action='store_true', default=True, help='Whether to sample conformers based on B.w.')
 
     # Feature arguments

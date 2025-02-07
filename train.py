@@ -3,7 +3,7 @@ from torch.utils.data import Subset
 torch.multiprocessing.set_sharing_strategy('file_system')
 import numpy as np
 from rdkit import RDLogger
-from utils.dataset import construct_loader
+from utils.dataset import construct_loader, make_dataset_from_smi
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
 from gflownet.gfn_train import gfn_sgd 
@@ -13,6 +13,7 @@ from utils.boltzmann import BoltzmannResampler
 from argparse import Namespace 
 import copy 
 import wandb
+import pickle
 
 RDLogger.DisableLog('rdApp.*')
 from tqdm import tqdm
@@ -35,40 +36,55 @@ def seed_everything(seed: int):
 
 
 
-def train(args, model, optimizer, scheduler, train_loader, val_loader):
+def train(args, model, optimizer, scheduler):
 
+    if args.data_name == 'geomdrugs':
+        train_loader, val_loader = construct_loader(args, boltzmann_resampler=boltzmann_resampler)
+        print('Set up dataset')
+        if args.smis is None:
+            dataset = train_loader.dataset
+        
+        else:
+            assert len(args.smis) > args.n_smis_batch
+            ixs = []
+            for i in range(len(train_loader.dataset)):
+                if train_loader.dataset[i].canonical_smi in args.smis:
+                    ixs.append(i)
+                    print(i)
+            dataset = Subset(train_loader.dataset, ixs)   
+    elif args.data_name == 'freesolv':
+        freesolv_smis = np.array(pickle.load(open("/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/freesolv_valid_smis.pkl"  ,'rb')))
+    else:
+        raise ValueError('Dataset not recognized!')
+        
     print('Set up replay buffer, seed and Wandb')
-     #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
+    #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
     ReplayBuffer = None
     seed_everything(args.seed)
     if args.use_wandb:
         wandb.login()
         run = wandb.init(project="gfn_torsional_diff")
-        run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_smi_{args.smis}_limit_train_mols_{args.limit_train_mols}"
-    print('Set up dataset')
-    if args.smis is None:
-        dataset = train_loader.dataset
+        run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}"
     
-    else:
-        assert len(args.smis) > args.n_smis_batch
-        ixs = []
-        for i in range(len(train_loader.dataset)):
-            if train_loader.dataset[i].canonical_smi in args.smis:
-                ixs.append(i)
-                print(i)
-        dataset = Subset(train_loader.dataset, ixs)   
 
     print("Starting GFN training ...")
-    for epoch in range(args.n_epochs):
-        
+    for epoch in range(args.n_epochs):        
         if args.log_gfn_metrics:
-            subset = Subset(dataset, list(range(5)) + [len(dataset) - i - 1 for i in range(5)] ) # val subset
+            if args.data_name == 'geomdrugs':
+                subset = Subset(dataset, [len(dataset) - i - 1 for i in range(len(dataset * 0.2))] ) # val subset
+            elif args.data_name == 'freesolv':
+                idx_val = np.arange(0, args.limit_train_mols // 5) + args.limit_train_mols
+                subset = make_dataset_from_smi(np.array(freesolv_smis)[idx_val])
             log_gfn_metrics(model, subset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
             log_gfn_metrics_cond(model, dataset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, args.n_smis_batch, args.batch_size_eval, args.rew_temp  ,  args.logrew_clamp, args.energy_fn,  args.num_trajs, args.use_wandb, ReplayBuffer, args.train_mode, args.seed)
         #score = get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix1, steps = 5)
         for _ in tqdm(range(args.num_sgd_steps)): 
-            subset_indices = np.random.choice(int(len(dataset)*0.8), args.n_smis_batch, replace=False)
-            subset = Subset(dataset, subset_indices)
+            if args.data_name == 'geomdrugs':
+                subset_indices = np.random.choice(int(len(dataset)*0.8), args.n_smis_batch, replace=False)
+                subset = Subset(dataset, subset_indices)
+            elif args.data_name == 'freesolv':
+                idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
+                subset = make_dataset_from_smi(np.array(freesolv_smis)[idx_train])
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
         print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     '''
@@ -137,7 +153,6 @@ if __name__ == '__main__':
         boltzmann_resampler = BoltzmannResampler(args, model)
     else:
         boltzmann_resampler = None
-    train_loader, val_loader = construct_loader(args, boltzmann_resampler=boltzmann_resampler)
 
     # get optimizer and scheduler
     optimizer, scheduler = get_optimizer_and_scheduler(args, model)
@@ -146,8 +161,4 @@ if __name__ == '__main__':
     #yaml_file_name = os.path.join(args.log_dir, 'model_parameters.yml')
     #save_yaml_file(yaml_file_name, args.__dict__) 
     args.device = device
-
-    if args.boltzmann_training:
-        boltzmann_train(args, model, optimizer, train_loader, val_loader, boltzmann_resampler)
-    else:
-        train(args, model, optimizer, scheduler, train_loader, val_loader)
+    train(args, model, optimizer, scheduler)

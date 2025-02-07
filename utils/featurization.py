@@ -128,5 +128,6 @@ def featurize_mol_from_smiles(smiles, dataset='drugs'):
         return None, None
 
     data = featurize_mol(mol, types)
-    data.name = smiles
+    #data.name = smiles (orignal)
+    data.canonical_smi = smiles
     return mol, data

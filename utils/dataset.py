@@ -2,6 +2,7 @@ import os.path
 from multiprocessing import Pool
 from diffusion.likelihood import mmff_energy
 from rdkit import Chem
+from rdkit.Chem import AllChem
 import numpy as np
 import glob, pickle, random
 import os.path as osp
@@ -13,6 +14,8 @@ from collections import defaultdict
 
 from utils.featurization import dihedral_pattern, featurize_mol, qm9_types, drugs_types
 from utils.torsion import get_transformation_mask, modify_conformer
+
+from diffusion.sampling import get_seed, embed_seeds
 
 
 class TorsionNoiseTransform(BaseTransform):
@@ -292,3 +295,27 @@ def construct_loader(args, modes=('train', 'val'), boltzmann_resampler=None):
         return loaders[0]
     else:
         return loaders
+
+
+
+
+## Functions for loading a dataset with smiles directly
+
+
+def embed_func(mol, numConfs):
+    AllChem.EmbedMultipleConfs(mol, numConfs=numConfs)
+    return mol
+
+def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func):
+    conformers = []
+    for smi in smiles:
+        mol, data = get_seed(smi)
+        if mol is None or data is None :
+            print('Could not generate mol for ', smi)
+        elif data.mask_rotate.sum() == 0:
+            print('No rotatable bonds for ', smi)
+        else:
+            conf , _ = embed_seeds(mol, data, n_confs=1, single_conf=True, pdb=None, embed_func=embed_func, mmff=optimize_mmff)
+            conformers += conf
+
+    return conformers
