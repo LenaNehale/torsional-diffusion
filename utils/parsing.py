@@ -28,12 +28,12 @@ def parse_train_args():
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
-    parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
+    parser.add_argument('--p_replay', type=float, default=0.2, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default=10, help='Temperature for rewards')
-    parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
-    parser.add_argument('--batch_size_train', type=int, default=8, help='Batch size for training')
+    parser.add_argument('--replay_buffer_size', type=int, default=3000, help='Size of the replay buffer')
+    parser.add_argument('--batch_size_train', type=int, default=10, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=32, help='Batch size for evaluation')
     parser.add_argument('--n_smis_batch', type=int, default=10, help='Number of SMILES strings per batch')
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
@@ -45,7 +45,7 @@ def parse_train_args():
 
 
     # Training arguments
-    parser.add_argument('--use_wandb', action='store_true', default=False, help='Whether to use wandb')
+    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
     parser.add_argument('--log_gfn_metrics', action='store_true', default=False, help='Whether to log GFN metrics')
     parser.add_argument('--n_epochs', type=int, default=250, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')

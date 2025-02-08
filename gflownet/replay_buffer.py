@@ -1,55 +1,42 @@
-
-
-
+import torch
+import  heapq
+from torch_geometric.data import Data, Batch
+import numpy as np
 
 class ReplayBufferClass():
     '''
     Replay Buffer that stores trajectories and log rewards. It is sorted such that the trajectories with the highest log rewards are at the beginning of the buffer.
     '''
-    def __init__(self, max_size = 1000):
+    def __init__(self, smis_dataset, max_size = 1000):
+        self.smis_dataset = smis_dataset
+        self.smi2smi_ix = {smi: i for i, smi in enumerate(smis_dataset)}
+        self.smi_ix2smi = {i: smi for i, smi in enumerate(smis_dataset)}
         self.max_size = max_size
-        self.buffer_trajs = [] # list of torchgeom.data objects
-        self.buffer_logrews = torch.Tensor([])
-    def __len__(self):
-        return len(self.buffer_trajs)
-    def update(self, batch_trajs, batch_logrews):
-        #print(batch_trajs, batch_logrews)
-        #transose batch_trajs
+        self.content = {smi_ix: [] for smi_ix in self.smi_ix2smi.keys()}  # shape of self.content[smi_ix]: (size, 2)
+    def get_len(self, smi):
+        smi_ix = self.smi2smi_ix[smi]
+        return len(self.content[smi_ix])
+    def update(self, smi, batch_trajs, batch_logrews):
+        smi_ix = self.smi2smi_ix[smi]
+        #transpose batch_trajs
         batch_trajs = [x.to_data_list() for x in batch_trajs]
         batch_trajs = list(map(list, zip(*batch_trajs)))
         # sort batch elements by logrew
         ixs = torch.argsort(batch_logrews, descending = True)
-        batch_trajs = [batch_trajs[ix] for ix in ixs]
-        batch_logrews = batch_logrews[ixs]
-        #batch_logrews, batch_trajs = zip(*sorted(zip(batch_logrews, batch_trajs), reverse = True))
-        batch_trajs = list(batch_trajs)
-        batch_logrews = torch.Tensor(batch_logrews)
-        # discard all elements in batch which logrew is smaller than the smallest logrew in the buffer
-        if len(self.buffer_logrews) > 0:
-            min_logrew = self.buffer_logrews[-1]
-            ixs = torch.where(batch_logrews >= min_logrew)[0]
-            batch_trajs = [batch_trajs[ix] for ix in ixs]
-            batch_logrews = batch_logrews[ixs]
-        # Insert the batch elements in the buffer
-        self.buffer_trajs = self.buffer_trajs + batch_trajs
-        self.buffer_logrews = torch.cat((self.buffer_logrews, batch_logrews))
-        # get indexes of sorted logrews
-        sorted_ixs = torch.argsort(self.buffer_logrews, descending = True)
-        self.buffer_trajs = [self.buffer_trajs[ix] for ix in sorted_ixs]
-        self.buffer_logrews = self.buffer_logrews[sorted_ixs]
-        if len(self.buffer_trajs) > self.max_size:
-            self.buffer_trajs = self.buffer_trajs[:self.max_size]
-            self.buffer_logrews = self.buffer_logrews[:self.max_size]
+        batch_content = [[batch_trajs[ix] , batch_logrews[ix]] for ix in ixs]
+        # Use heapq merge to merge the batch content with the buffer content
+        self.content[smi_ix] = list(heapq.merge(self.content[smi_ix], batch_content, key = lambda x: x[1], reverse = True))
+        self.content[smi_ix] = self.content[smi_ix][:self.max_size]
         
-        assert len(self.buffer_trajs) == len(self.buffer_logrews)
         
-    def sample(self, n):
-        if len(self.buffer_trajs)>=n:
-            ixs = np.random.choice(len(self.buffer_trajs), n, replace=False)
-            trajs =  [self.buffer_trajs[ix]for ix in ixs]
+    def sample(self,smi, n):
+        smi_ix = self.smi2smi_ix[smi]
+        if len(self.content[smi_ix])>=n:
+            ixs = np.random.choice(len(self.content[smi_ix]), n, replace=False)
+            trajs, logrews =  [self.content[smi_ix][ix][0] for ix in ixs], [self.content[smi_ix][ix][1] for ix in ixs]
             trajs = list(map(list, zip(*trajs)))
             trajs = [Batch.from_data_list(x) for x in trajs]
-            return trajs, self.buffer_logrews[ixs]
+            return trajs, torch.Tensor(logrews)
         else:
             raise ValueError(f"{n} samples requested, but only {len(self.buffer_trajs)} samples available in the buffer")
 

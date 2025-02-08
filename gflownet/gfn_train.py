@@ -27,6 +27,8 @@ import itertools
 import wandb
 import time
 
+from gflownet.replay_buffer import concat
+
 """
     Training procedures for conformer generation using GflowNets.
     The hyperparameters are taken from utils/parsing.py and can be given as arguments
@@ -464,20 +466,23 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             if grad_acc:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
                 if train and ReplayBuffer is not None:
-                    traj_replay, _ = ReplayBuffer.sample(min(len(ReplayBuffer), int(batch_size*p_replay)))
-                    logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
+                    traj_replay, _ = ReplayBuffer.sample(smi, min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
+                    if len(traj_replay) > 0:
+                        logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
             else:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model,  train = train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
                 if train and ReplayBuffer is not None:
-                    traj_replay, _ = ReplayBuffer.sample(int(batch_size*p_replay))
+                    traj_replay, _ = ReplayBuffer.sample(smi,  min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
                     logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
             
-            #traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
-            traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
+            if len(traj_replay) > 0:    
+                traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
+            else:
+                traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
 
             
 
@@ -498,10 +503,10 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                 confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj_concat , logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
         
             if ReplayBuffer is not None:
-                ReplayBuffer.update(traj, logrew[:len(traj[0])])
-                print('ReplayBuffer mean logrew', torch.mean(ReplayBuffer.buffer_logrews).item())
-                if use_wandb:
-                    wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.buffer_logrews).item()})
+                ReplayBuffer.update(smi, traj, logrew[:len(traj[0])])
+                #print('ReplayBuffer mean logrew', torch.mean(ReplayBuffer.buffer_logrews).item())
+                #if use_wandb:
+                    #wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.buffer_logrews).item()})
 
             print('loss ', loss_smile )
 
@@ -552,7 +557,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             loss_type = dict[train_mode]
             wandb.log({loss_type: torch.stack(loss_tot).mean().item()})
             
-    return torch.stack(loss_tot), conformers, torch.stack(logit_pfs), torch.stack(logit_pbs), torch.stack(logrews), total_perturbs, trajs
+    return torch.stack(loss_tot), conformers, logit_pfs, logit_pbs, logrews, total_perturbs, trajs
 
         
 
