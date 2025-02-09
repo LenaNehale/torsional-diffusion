@@ -29,7 +29,7 @@ for test_smi in test_smiles:
     mol = test_mols[test_smi][0]
     data = featurize_mol(mol, 'drugs')
     data.mol = mol
-    data.edge_mask, data.mask_rotate = get_transformation_mask(data)
+    data.edge_mask, data.mask_rotate = get_transformation_mask(mol, data)
     data.edge_mask = torch.tensor(data.edge_mask)
     if data.mask_rotate.shape[0] < 3 or data.mask_rotate.shape[0] > 7: continue
     data.pos = [mol.GetConformers()[0].GetPositions()]

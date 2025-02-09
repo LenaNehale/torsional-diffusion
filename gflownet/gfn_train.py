@@ -10,7 +10,7 @@ from tqdm import tqdm
 import torch
 import diffusion.torus as torus 
 import time 
-import contextlib
+import contextlib 
 from utils.dataset import ConformerDataset
 from utils.featurization import drugs_types
 from torch_geometric.data import Data, Batch 
@@ -68,7 +68,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
         z = torch.normal(mean=0, std=1, size=data.edge_pred.shape) 
         score = data.edge_pred.to(device)        
-        if train and random.random() < p_expl:
+        if random.random() < p_expl:
             noise_scale = 5 # Set to a higher value for more noise (hence more exploration)
         else:
             noise_scale = 1
@@ -94,7 +94,8 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         
         data.pos = new_pos
         data.total_perturb = (data.total_perturb + perturb.detach() ) % (2 * np.pi)
-        
+        del data.edge_pred 
+        torch.cuda.empty_cache()
         traj.append(copy.deepcopy(data))  
         
         #mols.append([pyg_to_mol(data.mol[i], data[i], copy=True) for i in range(bs)])
@@ -184,6 +185,8 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
         std_b = (g_b * np.sqrt(eps)).to(device)
         p_trajs_backward = torus.p_differentiable(perturb.detach(), std_b)
         logit_pb[:, sigma_idx] += torch.log(p_trajs_backward).reshape(-1, n_torsion_angles).sum(dim = -1)
+        del data.edge_pred 
+        torch.cuda.empty_cache()
         
     logit_pf = reduce(logit_pf, "bs steps-> bs", "sum")
     logit_pb = reduce(logit_pb, "bs steps-> bs", "sum")
@@ -479,7 +482,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
             
-            if len(traj_replay) > 0:    
+            if ReplayBuffer is not None and len(traj_replay) > 0:    
                 traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
             else:
                 traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
@@ -504,10 +507,8 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         
             if ReplayBuffer is not None:
                 ReplayBuffer.update(smi, traj, logrew[:len(traj[0])])
-                #print('ReplayBuffer mean logrew', torch.mean(ReplayBuffer.buffer_logrews).item())
-                #if use_wandb:
-                    #wandb.log({'ReplayBuffer mean logrew': torch.mean(ReplayBuffer.buffer_logrews).item()})
-
+                
+                
             print('loss ', loss_smile )
 
     
@@ -535,7 +536,11 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             logrew = None
         else:
             raise NotImplementedError(f"Training mode {train_mode} not implemented!")
-    
+        
+
+        if use_wandb:
+            wandb.log({f'logrew mean {smi}': logrew.mean().item()})
+
         loss_tot.append( loss_smile / len(dataset))
         conformers.append(confs)
         logit_pfs.append(logit_pf.detach() if logit_pf is not None else None)
@@ -556,6 +561,11 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             dict = {'gflownet': 'vargrad loss', 'diffusion': 'diffusion_loss', 'mle': 'mle loss'}
             loss_type = dict[train_mode]
             wandb.log({loss_type: torch.stack(loss_tot).mean().item()})
+
+            wandb.log({f'logrew total': torch.cat(logrews).mean().item()})
+    
+    
+
             
     return torch.stack(loss_tot), conformers, logit_pfs, logit_pbs, logrews, total_perturbs, trajs
 

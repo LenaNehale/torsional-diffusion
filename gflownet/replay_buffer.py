@@ -12,12 +12,10 @@ class ReplayBufferClass():
         self.smi2smi_ix = {smi: i for i, smi in enumerate(smis_dataset)}
         self.smi_ix2smi = {i: smi for i, smi in enumerate(smis_dataset)}
         self.max_size = max_size
-        self.content = {smi_ix: [] for smi_ix in self.smi_ix2smi.keys()}  # shape of self.content[smi_ix]: (size, 2)
+        self.content = {smi: [] for smi in self.smis_dataset}  # shape of self.content[smi_ix]: (size, 2)
     def get_len(self, smi):
-        smi_ix = self.smi2smi_ix[smi]
-        return len(self.content[smi_ix])
+        return len(self.content[smi])
     def update(self, smi, batch_trajs, batch_logrews):
-        smi_ix = self.smi2smi_ix[smi]
         #transpose batch_trajs
         batch_trajs = [x.to_data_list() for x in batch_trajs]
         batch_trajs = list(map(list, zip(*batch_trajs)))
@@ -25,18 +23,17 @@ class ReplayBufferClass():
         ixs = torch.argsort(batch_logrews, descending = True)
         batch_content = [[batch_trajs[ix] , batch_logrews[ix]] for ix in ixs]
         # Use heapq merge to merge the batch content with the buffer content
-        self.content[smi_ix] = list(heapq.merge(self.content[smi_ix], batch_content, key = lambda x: x[1], reverse = True))
-        self.content[smi_ix] = self.content[smi_ix][:self.max_size]
+        self.content[smi] = list(heapq.merge(self.content[smi], batch_content, key = lambda x: x[1], reverse = True))
+        self.content[smi] = self.content[smi][:self.max_size]
         
         
     def sample(self,smi, n):
-        smi_ix = self.smi2smi_ix[smi]
-        if len(self.content[smi_ix])>=n:
-            ixs = np.random.choice(len(self.content[smi_ix]), n, replace=False)
-            trajs, logrews =  [self.content[smi_ix][ix][0] for ix in ixs], [self.content[smi_ix][ix][1] for ix in ixs]
+        if len(self.content[smi])>=n:
+            ixs = np.random.choice(len(self.content[smi]), n, replace=False)
+            trajs, logrews =  [self.content[smi][ix][0] for ix in ixs], [self.content[smi][ix][1] for ix in ixs]
             trajs = list(map(list, zip(*trajs)))
             trajs = [Batch.from_data_list(x) for x in trajs]
-            return trajs, torch.Tensor(logrews)
+            return trajs, torch.Tensor(logrews) 
         else:
             raise ValueError(f"{n} samples requested, but only {len(self.buffer_trajs)} samples available in the buffer")
 

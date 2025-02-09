@@ -23,7 +23,7 @@ def try_mmff(mol):
         return True
     except Exception as e:
         return False
- 
+
 
 def get_seed(smi, seed_confs=None, dataset='drugs'):
     if seed_confs:
@@ -37,9 +37,11 @@ def get_seed(smi, seed_confs=None, dataset='drugs'):
         mol, data = featurize_mol_from_smiles(smi, dataset=dataset)
         if not mol:
             return None, None
-    data.edge_mask, data.mask_rotate = get_transformation_mask(data)
-    data.edge_mask = torch.tensor(data.edge_mask)
-    return mol, data
+        else:
+            data.edge_mask, data.mask_rotate = get_transformation_mask(mol, data)
+            if hasattr(data, 'edge_mask'): # ie we have at least one rotatable bond
+                data.edge_mask = torch.tensor(data.edge_mask)
+            return mol, data
 
 
 def embed_seeds(mol, data, n_confs, single_conf=False, smi=None, embed_func=None, seed_confs=None, pdb=None, mmff=False):

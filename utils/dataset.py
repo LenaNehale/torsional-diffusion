@@ -194,7 +194,7 @@ class ConformerDataset(Dataset):
             self.failures['featurize_mol_failed'] += 1
             return False
 
-        edge_mask, mask_rotate = get_transformation_mask(data)
+        edge_mask, mask_rotate = get_transformation_mask(mol, data)
         if np.sum(edge_mask) < 0.5:
             self.failures['no_rotable_bonds'] += 1
             return False
@@ -306,7 +306,7 @@ def embed_func(mol, numConfs):
     AllChem.EmbedMultipleConfs(mol, numConfs=numConfs)
     return mol
 
-def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func):
+def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func, init_positions_path = None):
     conformers = []
     for smi in smiles:
         mol, data = get_seed(smi)
@@ -316,6 +316,12 @@ def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func
             print('No rotatable bonds for ', smi)
         else:
             conf , _ = embed_seeds(mol, data, n_confs=1, single_conf=True, pdb=None, embed_func=embed_func, mmff=optimize_mmff)
+            if init_positions_path is not None:
+                with open(init_positions_path, 'rb') as f:
+                    init_positions = pickle.load(f)
+                num_pos = len(init_positions[smi])
+                pos_ix = random.randint(0, num_pos-1) # sample one position from dataset
+                conf.pos = init_positions[smi][pos_ix]
             conformers += conf
 
     return conformers

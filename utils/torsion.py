@@ -4,9 +4,148 @@ import torch, copy
 from scipy.spatial.transform import Rotation as R
 from torch_geometric.utils import to_networkx
 from torch_geometric.data import Data
+from rdkit import Chem, Geometry
+from rdkit.Chem import AllChem
 
 
-def get_transformation_mask(pyg_data):  
+
+
+### From Sasha's code
+
+def remove_duplicate_tas(tas_list):
+    """
+    Remove duplicate torsion angles from a list of torsion angle tuples.
+
+    Args
+    ----
+    tas_list : list of tuples
+        A list of torsion angle tuples, each containing four values:
+        (atom1, atom2, atom3, atom4).
+
+    Returns
+    -------
+    list of tuples: A list of unique torsion angle tuples, where duplicate angles have been removed.
+    """
+    tas = np.array(tas_list)
+    clean_tas = []
+    considered = []
+    for row in tas:
+        begin = row[1]
+        end = row[2]
+        if not (begin, end) in considered and not (end, begin) in considered:
+            if begin > end:
+                begin, end = end, begin
+            duplicates = tas[np.logical_and(tas[:, 1] == begin, tas[:, 2] == end)]
+            duplicates_reversed = tas[
+                np.logical_and(tas[:, 2] == begin, tas[:, 1] == end)
+            ]
+            duplicates_reversed = np.flip(duplicates_reversed, axis=1)
+            duplicates = np.concatenate([duplicates, duplicates_reversed], axis=0)
+            assert duplicates.shape[-1] == 4
+            duplicates = duplicates[
+                np.where(duplicates[:, 0] == duplicates[:, 0].min())[0]
+            ]
+            clean_tas.append(duplicates[np.argmin(duplicates[:, 3])].tolist())
+            considered.append((begin, end))
+    return clean_tas
+
+def is_hydrogen_ta(mol, ta):
+    """
+    Simple check whether the given torsion angle is 'hydrogen torsion angle', i.e.
+    it effectively influences only positions of some hydrogens in the molecule
+    """
+
+    def is_connected_to_all_hydrogens(mol, atom_id, except_id):
+        atom = mol.GetAtomWithIdx(atom_id)
+        neigh_numbers = []
+        for n in atom.GetNeighbors():
+            if n.GetIdx() != except_id:
+                neigh_numbers.append(n.GetAtomicNum())
+        neigh_numbers = np.array(neigh_numbers)
+        return np.all(neigh_numbers == 1)
+
+    first = is_connected_to_all_hydrogens(mol, ta[1], ta[2])
+    second = is_connected_to_all_hydrogens(mol, ta[2], ta[1])
+    return first or second
+
+def get_rotatable_ta_list(mol, rotate_hydrogen_tas=True):
+    """
+    Find unique rotatable torsion angles of a molecule. Torsion angle is given by a tuple of adjacent atoms'
+    indices (atom1, atom2, atom3, atom4), where:
+    - atom2 < atom3,
+    - atom1 and atom4 are minimal among neighbours of atom2 and atom3 correspondingly.
+
+    Torsion angle is considered rotatable if:
+    - the bond (atom2, atom3) is a single bond,
+    - none of atom2 and atom3 are adjacent to a triple bond (as the bonds near the triple bonds must be fixed),
+    - atom2 and atom3 are not in the same ring.
+
+    Args
+    ----
+    mol : RDKit Mol object
+        A molecule for which torsion angles need to be detected.
+
+    rotate_hydrogen_tas : bool
+        If True, the torsion angles with hydrogen atoms will be considered rotatable. Default is True.
+
+    Returns
+    -------
+    list of tuples: A list of unique torsion angle tuples corresponding to rotatable bonds in the molecule.
+    """
+    # TODO: implement a way to drop hydrogen torsion angles
+    torsion_pattern = "[*]~[!$(*#*)&!D1]-&!@[!$(*#*)&!D1]~[*]"
+    substructures = Chem.MolFromSmarts(torsion_pattern)
+    torsion_angles = remove_duplicate_tas(list(mol.GetSubstructMatches(substructures)))
+    if not rotate_hydrogen_tas:
+        torsion_angles = [ta for ta in torsion_angles if not is_hydrogen_ta(mol, ta)]
+    return torsion_angles
+
+
+
+def get_transformation_mask_correct(mol, pyg_data):  
+
+
+    rotatable_torsion_angles = get_rotatable_ta_list(mol)
+    if len(rotatable_torsion_angles) == 0:
+        print('Mol has no rotatable bonds!')
+        return None, None
+    rotatable_edges = np.array(rotatable_torsion_angles)[:, 1:3]
+    rotatable_edges = np.concatenate((rotatable_edges, rotatable_edges[:,::-1] )) # Take edges in both directions
+    edges = pyg_data.edge_index.T.numpy()
+    rotatable_edges_ixs = []
+    for e0 in rotatable_edges:
+        for i, e1 in enumerate(edges):
+            if np.all(e0 == e1):
+                rotatable_edges_ixs.append(i)
+        
+
+    G = to_networkx(pyg_data, to_undirected=False)
+    to_rotate = []
+    for i in range(0, edges.shape[0]):
+        if i in rotatable_edges_ixs:
+            G2 = G.to_undirected()
+            G2.remove_edge(*edges[i])
+            assert not nx.is_connected(G2)
+            l = list(sorted(nx.connected_components(G2), key=len)[0])
+            if edges[i, 0] in l:
+                to_rotate.append(l) # only add the atoms if it is the minimal connected component to rotate
+            else:
+                to_rotate.append([])
+        else:   
+            to_rotate.append([])
+
+    mask_edges = np.asarray([0 if len(l) == 0 else 1 for l in to_rotate], dtype=bool)
+    mask_rotate = np.zeros((np.sum(mask_edges), len(G.nodes())), dtype=bool)
+    idx = 0
+    for i in range(len(G.edges())):
+        if mask_edges[i]:
+            mask_rotate[idx][np.asarray(to_rotate[i], dtype=int)] = True
+            idx += 1
+
+    return mask_edges, mask_rotate
+
+
+def get_transformation_mask(mol, pyg_data):  
     G = to_networkx(pyg_data, to_undirected=False)
     to_rotate = []
     edges = pyg_data.edge_index.T.numpy()
@@ -54,6 +193,9 @@ def get_distance_matrix(pyg_data, mask_edges, mask_rotate):
     return edge_distances
 
 
+
+
+
 def modify_conformer(pos, edge_index, mask_rotate, torsion_updates_input, as_numpy=False):
     '''
     Modifies the conformer's 3D coordinates based on the torsion updates.
@@ -77,7 +219,7 @@ def modify_conformer(pos, edge_index, mask_rotate, torsion_updates_input, as_num
         u, v = int(e[0]), int(e[1])
 
         # check if need to reverse the edge, v should be connected to the part that gets rotated
-        assert not mask_rotate[idx_edge, u] or not mask_rotate[idx_edge, u.item()]
+        assert not mask_rotate[idx_edge, u] 
         assert mask_rotate[idx_edge, v]
 
         rot_vec = pos[u] - pos[v] # convention: positive rotation if pointing inwards. NOTE: DIFFERENT FROM THE PAPER!

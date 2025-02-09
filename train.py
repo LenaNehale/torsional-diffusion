@@ -54,22 +54,30 @@ def train(args, model, optimizer, scheduler):
                     print(i)
             dataset = Subset(train_loader.dataset, ixs)   
     elif args.data_name == 'freesolv':
-        freesolv_smis = np.array(pickle.load(open("/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/freesolv_subset_valid_smis_workshop.pkl"  ,'rb'))) #TODO REMIX THE DATASET! Right now the last 30 elements have high num of torsion angles
+        #freesolv_smis = np.array(pickle.load(open("/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/freesolv_subset_valid_smis_workshop.pkl"  ,'rb')))
+        freesolv_smis = args.smis.split()
+        args.limit_train_mols = len(freesolv_smis)
+        if args.fix_local_structures:
+            assert args.init_positions_path is not None
+            train_confs_init = make_dataset_from_smi(freesolv_smis, args.init_positions_path)
     else:
         raise ValueError('Dataset not recognized!')
         
     print('Set up replay buffer, seed and Wandb')
     #ReplayBuffer = ReplayBufferClass(max_size = args.replay_buffer_size)
     if args.data_name == 'freesolv':
-        ReplayBuffer = ReplayBufferClass(smis_dataset = freesolv_smis, max_size = args.replay_buffer_size)
-        #ReplayBuffer = None
+        if args.p_replay > 0:
+            ReplayBuffer = ReplayBufferClass(smis_dataset = freesolv_smis, max_size = args.replay_buffer_size)
+        else:
+            ReplayBuffer = None
     else:
         raise ValueError('Please define a smiles dataset for the replay buffer!')
     seed_everything(args.seed)
+    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_smis_{args.smis}"
     if args.use_wandb:
         wandb.login()
         run = wandb.init(project="gfn_torsional_diff")
-        run.name = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}"
+        run.name = exp_path
     
 
     print("Starting GFN training ...")
@@ -89,6 +97,10 @@ def train(args, model, optimizer, scheduler):
                 subset = Subset(dataset, subset_indices)
             elif args.data_name == 'freesolv':
                 idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
+                if args.fix_local_structures:
+                    subset = np.array(train_confs_init)[idx_train]
+                else:
+                    subset = make_dataset_from_smi(np.array(freesolv_smis)[idx_train])
                 subset = make_dataset_from_smi(np.array(freesolv_smis)[idx_train])
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
             
@@ -96,13 +108,15 @@ def train(args, model, optimizer, scheduler):
                 # Save the current model in a folder model_chkpts
                 if not os.path.exists('model_chkpts'):
                     os.makedirs('model_chkpts')
-                torch.save(model.state_dict(), f'model_chkpts/model_{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}_p_replay_{args.p_replay}.pt')
+                torch.save(model.state_dict(), f'model_chkpts/{exp_path}.pt')
                 # Save the replay buffer in pickle file
                 if ReplayBuffer is not None:
                     if not os.path.exists('replay_buffer'):
                         os.makedirs('replay_buffer')
-                    with open(f'replay_buffer/{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}.pkl', 'wb') as f:
+                    replay_buffer_path = f'replay_buffer/{exp_path}.pkl'
+                    with open(replay_buffer_path, 'wb') as f:
                         pickle.dump(ReplayBuffer, f)
+                    print(f"replay buffer size: {os.path.getsize(replay_buffer_path) / (1024 ** 3):.2f} GB")
         
         print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     '''

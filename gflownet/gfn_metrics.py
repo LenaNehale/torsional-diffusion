@@ -97,7 +97,7 @@ def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, ste
 
 
     #vargrad loss
-    train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0, grad_acc = False)
+    train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0.0, p_replay = 0.0, grad_acc = False)
     if use_wandb:
         wandb.log({"vargrad loss": torch.mean(train_loss)})
 
@@ -265,7 +265,7 @@ def log_gfn_metrics_cond(model, dataset, optimizer, device, sigma_min, sigma_max
         else:
             subset = list(np.array(dataset)[subset_indices]) #TODO: change, reaaally ugly!
         #train loss
-        train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, subset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0, p_replay = 0, grad_acc = False)
+        train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, subset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0.0, p_replay = 0.0, grad_acc = False)
         train_losses.append(train_loss)
         #Corr(logpT, logrew). 
         logpT = [get_logpT(x, model, sigma_min, sigma_max,  steps, device, ode=False, num_trajs = num_trajs) for x in conformers_train_gen ]
