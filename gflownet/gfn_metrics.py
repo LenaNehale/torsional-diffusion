@@ -95,7 +95,6 @@ def get_gt_score(gt_data_path, sigma_min, sigma_max, device, num_points, ix0, ix
 
 def log_gfn_metrics(model, dataset, optimizer, device, sigma_min, sigma_max, steps, batch_size, T  , num_points , logrew_clamp, energy_fn,  num_trajs, use_wandb, ReplayBuffer, train_mode, gt_data_path, seed):
 
-
     #vargrad loss
     train_loss, conformers_train_gen, logit_pfs, logit_pbs, logrews, perturbs, trajs = gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train=False, batch_size = batch_size, T=T, logrew_clamp = logrew_clamp, energy_fn=energy_fn, train_mode='gflownet', use_wandb = use_wandb, ReplayBuffer = ReplayBuffer, p_expl = 0.0, p_replay = 0.0, grad_acc = False)
     if use_wandb:

@@ -13,7 +13,7 @@ parser.add_argument('--level', type=str, default="normal", help='xTB optimizatio
 parser.add_argument('--xtb_energy', action='store_true', default=False, help='Whether to comput xTB energies')
 parser.add_argument('--xtb_path', type=str, default=None, help='Specifies local path to xTB installation')
 parser.add_argument('--limit', type=int, default=None, help='Limit in the number of conformers')
-args = parser.parse_args()
+w
 
 """
     Takes as input a dictionary of generated conformers, performs MMFF or xTB relaxations 

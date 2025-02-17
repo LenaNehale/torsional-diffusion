@@ -84,7 +84,7 @@ def embed_seeds(mol, data, n_confs, single_conf=False, smi=None, embed_func=None
     return conformers, pdb
 
 
-def perturb_seeds(data, pdb=None):
+def perturb_seeds(data, pdb=None): # CAREFUL: this function changes the data object itself with the perturbations
     for i, data_conf in enumerate(data):
         torsion_updates = np.random.uniform(low=-np.pi,high=np.pi, size=data_conf.edge_mask.sum())
         data_conf.pos = modify_conformer(data_conf.pos, data_conf.edge_index.T[data_conf.edge_mask],

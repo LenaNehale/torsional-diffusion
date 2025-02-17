@@ -73,7 +73,10 @@ def train(args, model, optimizer, scheduler):
     else:
         raise ValueError('Please define a smiles dataset for the replay buffer!')
     seed_everything(args.seed)
-    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_smis_{args.smis}"
+    #exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_smis_{args.smis}"
+    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_dataset_{args.data_name}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}"
+    if args.limit_train_mols == 1 : 
+        exp_path += f"_smi_{args.smis}"
     if args.use_wandb:
         wandb.login()
         run = wandb.init(project="gfn_torsional_diff")
@@ -104,20 +107,44 @@ def train(args, model, optimizer, scheduler):
                 subset = make_dataset_from_smi(np.array(freesolv_smis)[idx_train])
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
             
-            if k %100 == 0:
+            if k % 100 == 0:
+                print('Saving the model ...')
                 # Save the current model in a folder model_chkpts
-                if not os.path.exists('model_chkpts'):
-                    os.makedirs('model_chkpts')
-                torch.save(model.state_dict(), f'model_chkpts/{exp_path}.pt')
+                model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFNmodel_chkpts"
+                if not os.path.exists(f'{model_path}'):
+                    os.makedirs(f'{model_path}')
+                torch.save(model.state_dict(), f'{model_path}/{exp_path}.pt')
+                print('Model saved!')
+                
+                print('Saving replay buffer ...')
+                if ReplayBuffer is not None:
+                    replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFNreplay_buffer'
+                    if not os.path.exists(replaybuffer_path):
+                        os.makedirs(replaybuffer_path)
+                    positions_dict = ReplayBuffer.get_positions(freesolv_smis)
+                    pickle.dump(positions_dict, open(f'{replaybuffer_path}/{exp_path}.pkl', 'wb'))
+                print('replay buffer saved!')
+                '''
+                print('Saving the conformers ...')
+                # Save files for eval plots 
+                conformers_rdkit = make_dataset_from_smi(freesolv_smis)
+                _ , conformers_gen, _, _, logrews_gen, _, _ = gfn_sgd(model, conformers_rdkit  , optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train=False, batch_size = 2500, T= args.rew_temp , logrew_clamp = args.logrew_clamp, energy_fn=args.energy_fn, train_mode='gflownet', use_wandb = False, ReplayBuffer = None, p_expl = 0.0, p_replay = 0.0, grad_acc = False)
+
+                confs_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFNconformers'
+                if not os.path.exists(confs_path):
+                    os.makedirs(confs_path)
+                pickle.dump([conformers_gen , logrews_gen], open(f'{confs_path}/{exp_path}.pkl', 'wb'))
+                print('Conformers saved!')
+
+                
                 # Save the replay buffer in pickle file
                 if ReplayBuffer is not None:
-                    if not os.path.exists('replay_buffer'):
-                        os.makedirs('replay_buffer')
-                    replay_buffer_path = f'replay_buffer/{exp_path}.pkl'
+                    if not os.path.exists('~/scratch/torsionalGFNreplay_buffer'):
+                        os.makedirs('~/scratch/torsionalGFNreplay_buffer')
+                    replay_buffer_path = f'~/scratch/torsionalGFNreplay_buffer/{exp_path}.pkl'
                     with open(replay_buffer_path, 'wb') as f:
                         pickle.dump(ReplayBuffer, f)
-                    print(f"replay buffer size: {os.path.getsize(replay_buffer_path) / (1024 ** 3):.2f} GB")
-        
+                '''
         print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     '''
         val_loss, base_val_loss = test_epoch(model, val_loader, device) 

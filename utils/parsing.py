@@ -25,18 +25,18 @@ def parse_train_args():
 
     
     #GflowNet arguments
-    parser.add_argument('--smis', type=str, default=  "c1ccc(cc1)OC=O CCC(=O)OC  CCCCCC(=O)OC  CCOP(=O)(OCC)OCC  CCCCN(CC)C(=O)SCCC", help='SMILES strings for which to generate conformers')
+    parser.add_argument('--smis', type=str, default=   " c1ccc(cc1)CCCO  CCC(C)CC  CC(=C)c1ccccc1  Cc1cc2ccccc2cc1C  CC(C)O  CC(C)(C)C  CC[C@H](C)c1ccccc1  CCCOCCC  C[C@@H]1CCCC[C@@H]1C  CCCCC=O  CC(C)CO  CCOCCO  CCCC(C)(C)C  CCC  CCc1cccc(c1)O  CC=C(C)C  CC(C)CCOC=O  CCOC(=O)CCC(=O)OCC  CCOP(=S)(OCC)SCSCC  c1ccc(c(c1)C(F)(F)F)C(F)(F)F  CCOC(=O)c1ccccc1  CCCCCCC  CC(=CCC/C(=C\\CO)/C)C  CC(C)CCO  CCCc1ccc(c(c1)OC)O  COc1ccccc1OC  CCSC  CCOC(=O)c1ccc(cc1)O  CCC[C@@H](C)O  CCCCCCN  CC(=CCC/C(=C/CO)/C)C  CC(=C)C=C  COc1cccc(c1O)OC  C1[C@H]([C@@H]([C@H]([C@H](O1)O)O)O)O  CC(=O)Oc1ccccc1C(=O)O  C([C@H]([C@H]([C@@H]([C@@H](CO)O)O)O)O)O  COc1ccccc1N  CC(=O)OCC(COC(=O)C)OC(=O)C  CCCCCBr  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  CCCCCCCCC=O  CC(C)(/C=N\\OC(=O)NC)SC  CCCCOCCCC  CC(C)COC(=O)C  COCC(OC)(OC)OC  CC(C)(C)Br  Cc1cccc(c1C)O  Cn1cnc2c1c(=O)n(c(=O)n2C)C  COC(=O)C(F)(F)F  c1ccc(cc1)O[C@@H](C(F)F)F  CC[C@H](C(C)C)O  CC(C)(C)C(=O)OC  CC(C)OC(C)C"  , help='SMILES strings for which to generate conformers')
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--p_expl', type=float, default=0.1, help='Exploration probability for GflowNets')
     parser.add_argument('--p_replay', type=float, default=0.2, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
-    parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 293, help='Temperature for rewards')
-    parser.add_argument('--replay_buffer_size', type=int, default=100, help='Size of the replay buffer')
-    parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
+    parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
+    parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
+    parser.add_argument('--batch_size_train', type=int, default=32, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=32, help='Batch size for evaluation')
-    parser.add_argument('--n_smis_batch', type=int, default=10, help='Number of SMILES strings per batch')
+    parser.add_argument('--n_smis_batch', type=int, default=5, help='Number of SMILES strings per batch')
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
     parser.add_argument('--num_points', type=int, default=10, help='Number of points for evaluation')
     parser.add_argument('--num_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')

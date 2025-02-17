@@ -27,6 +27,8 @@ import itertools
 import wandb
 import time
 
+import sys
+
 from gflownet.replay_buffer import concat
 
 """
@@ -398,7 +400,7 @@ def vargrad_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sig
         del logit_pf_local, grad_f, score, data.edge_pred, mean, p_trajs_forward
         torch.cuda.empty_cache()
     
-    return data, grad, logit_pf, logit_pb, logrews
+    return Batch.to_data_list(data), grad, logit_pf, logit_pb, logrews
 
 
 def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb = False):      
@@ -465,24 +467,25 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         if train_mode == 'gflownet':
             samples = [copy.deepcopy(gt_data) for _ in range(batch_size)]
             samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
-
             if grad_acc:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
                 if train and ReplayBuffer is not None:
-                    traj_replay, _ = ReplayBuffer.sample(smi, min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
-                    if len(traj_replay) > 0:
+                    final_states_replay, _ = ReplayBuffer.sample(smi, min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
+                    if len(final_states_replay) > 0:
+                        traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps)
                         logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
             else:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model,  train = train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
                 if train and ReplayBuffer is not None:
-                    traj_replay, _ = ReplayBuffer.sample(smi,  min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
+                    final_states_replay, _ = ReplayBuffer.sample(smi, min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
+                    traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps)
                     logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
             
-            if ReplayBuffer is not None and len(traj_replay) > 0:    
+            if ReplayBuffer is not None and len(final_states_replay) > 0:    
                 traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
             else:
                 traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
@@ -506,12 +509,14 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                 confs, loss_smile, logit_pf, logit_pb, logrew = get_loss(traj_concat , logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
         
             if ReplayBuffer is not None:
-                ReplayBuffer.update(smi, traj, logrew[:len(traj[0])])
-                
-                
-            print('loss ', loss_smile )
-
-    
+                ReplayBuffer.update(smi, confs[:batch_size], logrew[:batch_size]) # discard the elements that were already present in the replay buffer
+                if use_wandb:
+                    N = ReplayBuffer.get_len(smi)
+                    rb_logrew_mean_smi =  [ReplayBuffer.content[smi][n][1] for n in range(N)] 
+                    rb_logrew_mean_smi = torch.stack(rb_logrew_mean_smi).mean().item()
+                    wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi }) #TODO: ugly, write this better 
+                print('Replay Buffer size in bytes: ', sys.getsizeof(ReplayBuffer))
+            
         
         elif train_mode =='diffusion':
             #TODO: here, gt_data has only one element (because in the dataloader, we have gt_data.pos = gt_data.pos[0]. Add all other ground truth conformers, and see where they land in the energy landscape with bond legnths/angles taken from the 1st conf )
