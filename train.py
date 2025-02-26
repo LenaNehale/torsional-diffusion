@@ -59,12 +59,12 @@ def train(args, model, optimizer):
     for epoch in range(args.n_epochs):        
         if args.log_gfn_metrics:
             idx_val = np.random.randint(0, len(val_smis), size = args.n_smis_batch)
-            subset = make_dataset_from_smi(val_smis[idx_val], args.init_positions_path, n_local_structures = args.n_local_structures)
+            subset = make_dataset_from_smi(val_smis[idx_val], args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
             log_gfn_metrics(model, subset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
         
         for k in tqdm(range(args.num_sgd_steps)): 
             idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
-            subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures)
+            subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
             
             if k % 100 == 0:

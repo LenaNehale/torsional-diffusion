@@ -50,16 +50,7 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
     return energy_landscape, logpTs
 
 
-def get_rmsds(mols0, mols1):
-    '''
-    This function compares a set of molecules(e.g. optimized vs non optimized, gt vs generated) and returns the RMSDs between each pair (e.g. non-optimized, optimized).
-    '''
-    rmsds = []
-    for ix in range(len(mols0)):
-        mol0, mol1 = mols0[ix], mols1[ix]
-        rdMolAlign.AlignMol(mol0, mol1)
-        rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
-    return rmsds
+
 
 
 

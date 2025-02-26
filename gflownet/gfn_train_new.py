@@ -19,8 +19,7 @@ import itertools
 import wandb
 import time
 from einops import reduce, rearrange, repeat
-from rdkit.Chem import rdMolAlign
-from utils.standardization import fast_rmsd
+
 
 from gflownet.replay_buffer import concat
 
@@ -30,9 +29,9 @@ from gflownet.replay_buffer import concat
 """
 
 
-def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, p_expl, sample_mode, step_start = None , step_end = None):
+def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, p_expl, sample_mode):
     '''
-    Sample forward trajectories. N.B. all conformers should come from the same molecular graph.
+    Sample forward trajectories.
     Args:
     - conformers_input (list): List of PyTorch geometric data objects representing conformers.
     - model (torch.nn.Module): Score model.
@@ -106,9 +105,9 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
     return traj, logit_pf, logit_pb
 
 
-def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
     '''
-    Sample backward trajectories. N.B. all conformers should come from the same molecular graph.
+    Sample backward trajectories.
     Args:
     - conformers_input (list): List of PyTorch geometric data objects representing conformers.
     - sigma_min (float): Minimum noise variance at timestep 0.
@@ -138,7 +137,7 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device
 
 def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=True):
     '''
-    Compute the logits of forward and backward trajectories (logits are not normalized). N.B. all conformers should come from the same molecular graph.
+    Compute the logits of forward and backward trajectories (logits are not normalized).
     Args:
     - traj (list): List of PyTorch geometric batch objects representing a batch of comformers at each timestep of the trajectory.
     - model (torch.nn.Module): Score model.
@@ -195,7 +194,7 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
 
 def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = True, num_trajs = 10):
     '''
-    Computes the log-likelihood of conformers using the reverse ODE (data -> noise).N.B. all conformers should come from the same molecular graph.
+    Computes the log-likelihood of conformers using the reverse ODE (data -> noise)
     Args:
     - conformers: list of pytorch geometric data objects representing conformers
     - model: score model
@@ -446,16 +445,7 @@ def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use
     '''
     return loss
 
-def get_rmsds(mols0, mols1):
-    '''
-    This function compares a set of molecules(e.g. optimized vs non optimized, gt vs generated) and returns the RMSDs between each pair (e.g. non-optimized, optimized).
-    '''
-    rmsds = []
-    for ix in range(len(mols0)):
-        mol0, mol1 = mols0[ix], mols1[ix]
-        rdMolAlign.AlignMol(mol0, mol1)
-        rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
-    return rmsds
+
 
 def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False):
     if train:
@@ -473,22 +463,25 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
     total_perturbs = []
     trajs = []
 
+    optimizer.zero_grad()
     
-    for i in range(len(dataset)):
-        smi  = dataset[i][0].canonical_smi
-        gt_data = dataset[i] # gt_data contains conformers with different local structures for smi
-        optimizer.zero_grad()
-        if train_mode == 'gflownet':
-            # TODO change. For now, take one local structure for each smile 
-            gt_data = random.choice(gt_data).to(device)
-            samples = [copy.deepcopy(gt_data) for _ in range(batch_size)]
-            samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
+
+    batch, conditions = sample_batch(dataset, n_smis, n_local_structures) #batch shape: [n_smis, n_local_structures]. Conditions is a dictionary which keys are smiles and values are the local structures ixs in the dataset
+    smis = list(conditions.keys())
+    
+    if train_mode == 'gflownet':
+
+        batch = init_confs(batch, n_confs, randomize_tas = True)  # apply uniform noise to torsion angles. Shape: [n_smis, n_local_structures, n_confs]
+        for i, smi in enumerate(smis):
+            batch_smi = batch[i]
+            batch_smi_flat = rearrange(batch_smi, 'n_local_structures  n_confs -> (n_local_structures  n_confs)') # shape: n_local_structures * n_confs
             if grad_acc:
-                traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
+                traj, logit_pf, logit_pb = sample_forward_trajs(batch_smi_flat , model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
                 if train and ReplayBuffer is not None:
-                    final_states_replay, _ = ReplayBuffer.sample(smi, min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
-                    if len(final_states_replay) > 0:
-                        traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps)
+                    batch_smi_replay, _ = ReplayBuffer.sample(smi, conditions[smi], min(ReplayBuffer.get_len(conditions), int(batch_size*p_replay))) # shape: [n_local_structures, variable_list_size]
+                    batch_smi_replay_flat = batch_replay.flatten()
+                    if len(batch_smi_replay_flat.flatten()) > 0:
+                        traj_replay = sample_backward_trajs(batch_smi_replay_flat, sigma_min, sigma_max,  steps)
                         logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
@@ -532,68 +525,44 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                     rb_logrew_mean_smi = torch.stack(rb_logrew_mean_smi).mean().item()
                     wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi }) #TODO: ugly, write this better 
             
-        
-        elif train_mode =='diffusion':
-            loss_smile = get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb) 
-            traj = None
-            confs, logit_pf, logit_pb = gt_data, None, None
-            logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
-        
-        elif train_mode == 'mle': 
-            # sample backward trajectories. Samples in gt_data don't need to have the same local structure
-            traj = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
-            #traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
-            logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
-            #logit_pf_bis, logit_pb_bis, logp_bis = get_log_p_f_and_log_pb(traj_bis, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
-            loss_kl = - logit_pf.mean()
-            #loss_consistency = torch.pow(logit_pf.detach() - logit_pb - logit_pf_bis + logit_pb_bis, 2).mean()
-            loss_consistency = 0.0
-            print('KL loss', loss_kl, 'consistency loss', loss_consistency)
-            #if use_wandb:
-                    #wandb.log({'KL loss': loss_kl.item()})
-                    #wandb.log({'consistency loss': loss_consistency.item()})
-            loss_smile = loss_kl + 0.0 *loss_consistency
-
-            
-            #confs = gt_data
-            #logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
-
-        else:
-            raise NotImplementedError(f"Training mode {train_mode} not implemented!")
-        
-        
-        
-        if train_mode == 'mle' or train_mode == 'diffusion':
-            # Sample on-policy for computing measures
-            samples = perturb_seeds(dataset[i] )  
-            traj_on_policy, logit_pf_on_policy, logit_pb_on_policy = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
-            confs, _, _, _, logrew = get_loss(traj_on_policy , logit_pf_on_policy, logit_pb_on_policy, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=False, loss='vargrad', logrew_clamp = logrew_clamp)
-        
-        gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in dataset[i]]
-        gen_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in confs]
-        rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(len(gen_mols))], gen_mols) for i in range(len(gt_mols))])
-        rmsds = np.min(rmsds, axis=0)
-        if use_wandb:
-            wandb.log({f"RMSDs gen/ground truth {smi}": np.mean(rmsds).item()})
-
-
-        
-
-        if use_wandb:
-            wandb.log({f'logrew mean {smi}': logrew.mean().item()})
-
-        loss_tot.append( loss_smile / len(dataset))
-        conformers.append(confs)
-        logit_pfs.append(logit_pf.detach() if logit_pf is not None else None)
-        logit_pbs.append(logit_pb)
-        logrews.append(logrew)
-        
-        if train_mode == 'gflownet' :
-            total_perturbs.append(traj[-1].total_perturb)
-        trajs.append(traj)
-        
-   
     
+    elif train_mode =='diffusion':
+        loss_smile = get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb) 
+        traj = None
+        confs, logit_pf, logit_pb = gt_data, None, None
+        logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
+    
+    elif train_mode == 'mle': 
+        # sample backward trajectories. Samples in gt_data don't need to have the same local structure
+        traj = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
+        traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
+        logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
+        logit_pf_bis, logit_pb_bis, logp_bis = get_log_p_f_and_log_pb(traj_bis, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
+        loss_kl = - logit_pf.mean()
+        loss_consistency = torch.pow(logit_pf.detach() - logit_pb - logit_pf_bis + logit_pb_bis, 2).mean()
+        print('KL loss', loss_kl, 'consistency loss', loss_consistency)
+        #if use_wandb:
+                #wandb.log({'KL loss': loss_kl.item()})
+                #wandb.log({'consistency loss': loss_consistency.item()})
+        loss_smile = loss_kl + 0.0 *loss_consistency
+        confs = gt_data
+        logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
+    else:
+        raise NotImplementedError(f"Training mode {train_mode} not implemented!")
+    
+
+    if use_wandb:
+        wandb.log({f'logrew mean {smi}': logrew.mean().item()})
+
+    loss_tot.append( loss_smile / len(dataset))
+    conformers.append(confs)
+    logit_pfs.append(logit_pf.detach() if logit_pf is not None else None)
+    logit_pbs.append(logit_pb)
+    logrews.append(logrew)
+    
+    if train_mode == 'gflownet' :
+        total_perturbs.append(traj[-1].total_perturb)
+    trajs.append(traj)
     
     if train:
         if train_mode != 'gflownet' or (  train_mode == 'gflownet' and grad_acc == False): 

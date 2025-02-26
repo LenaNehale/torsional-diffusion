@@ -18,7 +18,9 @@ def parse_train_args():
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
-    parser.add_argument('--n_local_structures', type=int, default=10, help= 'Number of local structures per smile in a batch')  
+    parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  
+    parser.add_argument('--max_n_local_structures', type=int, default=1, help= 'Max Number of local structures per smile to sample from')  #TODO  set to +inf for mle/diffusion!
+
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
     parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
 
@@ -29,8 +31,8 @@ def parse_train_args():
 
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
-    parser.add_argument('--p_expl', type=float, default=0.1, help='Exploration probability for GflowNets')
-    parser.add_argument('--p_replay', type=float, default=0.2, help='Replay probability for GflowNets')
+    parser.add_argument('--p_expl', type=float, default=0.6, help='Exploration probability for GflowNets')
+    parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')

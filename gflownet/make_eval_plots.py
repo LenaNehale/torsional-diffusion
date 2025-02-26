@@ -97,7 +97,8 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
     pos_md = {smi:pos_md[smi] for smi in smis}
     logrews_md = {smi:logrews_md[smi] for smi in smis}
     mols_md = {smi:mols_md[smi] for smi in smis}
-    logZs_md = [torch.logsumexp(torch.Tensor(logrews_md[smi]) / len(logrews_md[smi]), dim = 0)  for smi in smis]
+    #logZs_md = [torch.logsumexp(torch.Tensor(logrews_md[smi]) / len(logrews_md[smi]), dim = 0)  for smi in smis]
+    logZs_md = None
     logZs_hat = torch.stack(logZs_hat)
     
     for smi in smis:
@@ -116,6 +117,39 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
 
 
 
+from gflownet.gfn_train import get_logpT, get_logrew
+
+
+def get_correlations(confs, model, sigma_min, sigma_max,  steps, device, num_trajs, energy_fn, logrew_clamp, exp_path, n_subplots = 5): 
+    '''
+    Args:
+    - confs: dictionary where keys are smiles and values are lists of pytorch geometric conformers
+    - model: trained model
+    - sigma_min, sigma_max: float, minimum and maximum values of the diffusion step size
+    - steps: int, number of diffusion steps
+    - device: torch.device
+    - num_trajs: int, number of backward trajectories used toapproixmate logpT
+    - n_subplots: int, number of subplots per row
+    Returns:
+    - corrs: dictionary where keys are smiles and values are the correlation coefficient between logpT and logrews
+    '''
+    logpTs = {}
+    logrews = {}
+    corrs = {}
+    n_smis = len(confs.keys())
+    fig, axes = plt.subplots(max(n_smis // n_subplots, 2), n_subplots, figsize=(10, 5))
+    for smi_idx, smi in enumerate(confs.keys()):
+        logpTs[smi] = get_logpT(confs[smi], model, sigma_min, sigma_max,  steps, device, ode=False, num_trajs = num_trajs).cpu().detach().numpy()
+        logrews[smi] = get_logrew(confs[smi], T, energy_fn = energy_fn, clamp = logrew_clamp).cpu().numpy()
+        corrs[smi] = np.corrcoef(logpTs[smi], logrews[smi])[0, 1]
+        axes[ smi_idx // n_subplots , smi_idx % n_subplots ].scatter(logpTs[smi], logrews[smi])
+        axes[ smi_idx // n_subplots , smi_idx % n_subplots ].set_title(smi)
+    fig.suptitle('logpT vs logrews') 
+    plt.tight_layout() 
+    plt.savefig(f"correlations_{exp_path}.png")
+    plt.close(fig)
+    return corrs
+        
 
 
 '''
