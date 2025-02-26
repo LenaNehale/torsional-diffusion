@@ -1,33 +1,25 @@
-from diffusion.sampling import * 
+from utils.dataset import * 
+from utils.torsion import perturb_batch
 import torch
 torch.multiprocessing.set_sharing_strategy("file_system")
 import numpy as np
-from rdkit import RDLogger
-RDLogger.DisableLog("rdApp.*")
 
 import numpy as np
-from tqdm import tqdm
 import torch
 import diffusion.torus as torus 
-import time 
 import contextlib 
-from utils.dataset import ConformerDataset
-from utils.featurization import drugs_types
-from torch_geometric.data import Data, Batch 
+from torch_geometric.data import Batch 
 import torch_geometric
 
 
-from rdkit.Chem import rdMolAlign, rdDepictor, Draw
-from utils.standardization import fast_rmsd
-import pickle
-import matplotlib.pyplot as plt
+
 from scipy.stats import multivariate_normal
 import random
 import itertools
 import wandb
 import time
+from einops import reduce, rearrange, repeat
 
-import sys
 
 from gflownet.replay_buffer import concat
 
@@ -404,8 +396,20 @@ def vargrad_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sig
 
 
 def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb = False):      
+    '''
+    Compute the diffusion loss.
+    Args:
+    - model (torch.nn.Module): Score model.
+    - gt_data (list): List of PyTorch geometric data objects representing conformers.
+    - sigma_min (float): Minimum noise variance at timestep 0.
+    - sigma_max (float): Maximum noise variance at timestep T.
+    - device (torch.device): CUDA or CPU device.
+    - train (bool): Whether the model is in training mode.
+    - use_wandb (bool): Whether to log to wandb.
+    Returns:
+    - loss (torch.Tensor): Diffusion loss.
+    '''
     assert all( gt_data[i].canonical_smi ==  gt_data[0].canonical_smi for i in range(len(gt_data)))
-    # choose a subset of k elements from dummy_data 
     gt_data = Batch.from_data_list(gt_data).to(device)
     data = copy.deepcopy(gt_data).to(device)
     # Noise data 
@@ -461,10 +465,12 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
 
     
     for i in range(len(dataset)):
-        smi  = dataset[i].canonical_smi
-        gt_data = dataset[i].to(device)
+        smi  = dataset[i][0].canonical_smi
+        gt_data = dataset[i] # gt_data contains conformers with different local structures for each smi
         optimizer.zero_grad()
         if train_mode == 'gflownet':
+            # TODO change. For now, take one local structure for each smile 
+            gt_data = random.choice(gt_data).to(device)
             samples = [copy.deepcopy(gt_data) for _ in range(batch_size)]
             samples = perturb_seeds(samples)  # apply uniform noise to torsion angles
             if grad_acc:
@@ -515,17 +521,16 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                     rb_logrew_mean_smi =  [ReplayBuffer.content[smi][n][1] for n in range(N)] 
                     rb_logrew_mean_smi = torch.stack(rb_logrew_mean_smi).mean().item()
                     wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi }) #TODO: ugly, write this better 
-                print('Replay Buffer size in bytes: ', sys.getsizeof(ReplayBuffer))
             
         
         elif train_mode =='diffusion':
-            #TODO: here, gt_data has only one element (because in the dataloader, we have gt_data.pos = gt_data.pos[0]. Add all other ground truth conformers, and see where they land in the energy landscape with bond legnths/angles taken from the 1st conf )
-            loss_smile = get_loss_diffusion(model, gt_data, sigma_min, sigma_max, smi, device, train, use_wandb = use_wandb) 
+            loss_smile = get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb) 
             traj = None
-            confs, logit_pf, logit_pb, logrew = gt_data, None, None, None
+            confs, logit_pf, logit_pb = gt_data, None, None
+            logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
         
         elif train_mode == 'mle': 
-            # sample backward trajectories
+            # sample backward trajectories. Samples in gt_data don't need to have the same local structure
             traj = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
             traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
             logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
@@ -538,7 +543,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                     #wandb.log({'consistency loss': loss_consistency.item()})
             loss_smile = loss_kl + 0.0 *loss_consistency
             confs = gt_data
-            logrew = None
+            logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
         else:
             raise NotImplementedError(f"Training mode {train_mode} not implemented!")
         
@@ -557,7 +562,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         trajs.append(traj)
         
     if train:
-        if grad_acc == False: 
+        if train_mode != 'gflownet' or (  train_mode == 'gflownet' and grad_acc == False): 
             torch.stack(loss_tot).mean().backward()  
         optimizer.step()          
     torch.cuda.empty_cache()

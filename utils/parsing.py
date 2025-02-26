@@ -12,20 +12,21 @@ def parse_train_args():
     parser = ArgumentParser()
     parser.add_argument('--log_dir', type=str, default=SCRATCH / 'torsional-diffusion/workdir/test_run', help='Folder in which to save model and logs')
     #parser.add_argument('--restart_dir', default=SCRATCH / 'torsional-diffusion/workdir/boltz_T300' ,  type=str, help='Folder of previous training model from which to restart')
-    parser.add_argument('--restart_dir', default=None ,  type=str, help='Folder of previous training model from which to restart')
+    parser.add_argument('--restart_dir', default = None ,  type=str, help='Folder of previous training model from which to restart')
     parser.add_argument('--cache', type=str, default=SCRATCH / 'torsional-diffusion/cache/test_run', help='Folder from where to load/restore cached dataset')
     parser.add_argument('--data_dir', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
-    parser.add_argument('--data_name', type=str, default='freesolv', help='freesolv or geomdrugs')  
+    parser.add_argument('--n_local_structures', type=int, default=10, help= 'Number of local structures per smile in a batch')  
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
-    parser.add_argument('--fix_local_structures', type=bool, default=False, help='whether or not to fix local structures from a predefined dataset')
-    parser.add_argument('--init_positions_path', type=str, default=None, help='Path to the initial positions of conformers')
+    parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
 
     
     #GflowNet arguments
-    parser.add_argument('--smis', type=str, default=   " c1ccc(cc1)CCCO  CCC(C)CC  CC(=C)c1ccccc1  Cc1cc2ccccc2cc1C  CC(C)O  CC(C)(C)C  CC[C@H](C)c1ccccc1  CCCOCCC  C[C@@H]1CCCC[C@@H]1C  CCCCC=O  CC(C)CO  CCOCCO  CCCC(C)(C)C  CCC  CCc1cccc(c1)O  CC=C(C)C  CC(C)CCOC=O  CCOC(=O)CCC(=O)OCC  CCOP(=S)(OCC)SCSCC  c1ccc(c(c1)C(F)(F)F)C(F)(F)F  CCOC(=O)c1ccccc1  CCCCCCC  CC(=CCC/C(=C\\CO)/C)C  CC(C)CCO  CCCc1ccc(c(c1)OC)O  COc1ccccc1OC  CCSC  CCOC(=O)c1ccc(cc1)O  CCC[C@@H](C)O  CCCCCCN  CC(=CCC/C(=C/CO)/C)C  CC(=C)C=C  COc1cccc(c1O)OC  C1[C@H]([C@@H]([C@H]([C@H](O1)O)O)O)O  CC(=O)Oc1ccccc1C(=O)O  C([C@H]([C@H]([C@@H]([C@@H](CO)O)O)O)O)O  COc1ccccc1N  CC(=O)OCC(COC(=O)C)OC(=O)C  CCCCCBr  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  CCCCCCCCC=O  CC(C)(/C=N\\OC(=O)NC)SC  CCCCOCCCC  CC(C)COC(=O)C  COCC(OC)(OC)OC  CC(C)(C)Br  Cc1cccc(c1C)O  Cn1cnc2c1c(=O)n(c(=O)n2C)C  COC(=O)C(F)(F)F  c1ccc(cc1)O[C@@H](C(F)F)F  CC[C@H](C(C)C)O  CC(C)(C)C(=O)OC  CC(C)OC(C)C"  , help='SMILES strings for which to generate conformers')
+    parser.add_argument('--train_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
+
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--p_expl', type=float, default=0.1, help='Exploration probability for GflowNets')

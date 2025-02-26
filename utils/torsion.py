@@ -240,8 +240,8 @@ def perturb_batch(data, torsion_updates, split=False, return_updates=False):
     pos_new = [] if split else copy.deepcopy(data.pos)
     edges_of_interest = data.edge_index.T[data.edge_mask]
     idx_node = 0 
-    idx_edges = 0
-    torsion_update_list = []
+    idx_edges = 0 
+    torsion_update_list = [] 
     for i, mask_rotate in enumerate(data.mask_rotate):
         pos = data.pos[idx_node:idx_node + mask_rotate.shape[1]]
         edges = edges_of_interest[idx_edges:idx_edges + mask_rotate.shape[0]] - idx_node

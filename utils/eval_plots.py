@@ -1,10 +1,14 @@
+
+
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from rdkit.Chem import rdMolTransforms
 from rdkit.Chem import rdMolAlign
 from numpy.typing import ArrayLike, NDArray
-
+  
 
 def make_logrew_histograms(logrews_random, logrews_gen, logrews_gt, exp_path, label, range = 2):
     '''
@@ -22,13 +26,13 @@ def make_logrew_histograms(logrews_random, logrews_gen, logrews_gt, exp_path, la
     smis = logrews_gen.keys()
     n_smis = len(smis)
     n_subplots = 5 # number of subplots per row
-    fig, axes = plt.subplots(max(n_smis // n_subplots, 1), n_subplots, figsize=(10, 5))
+    fig, axes = plt.subplots(max(n_smis // n_subplots, 2), n_subplots, figsize=(10, 5))
     if not isinstance(axes, np.ndarray):
         axes = np.array([[axes]])
 
     for smi_idx, smi in enumerate(smis):
 
-        a , b = logrews_gt[smi].min().item() ,  logrews_gt[smi].max().item()
+        a , b = torch.Tensor(logrews_gt[smi]).min().item() ,  torch.Tensor(logrews_gt[smi]).max().item()
         range_min = a - range * (b - a)
         range_max = b + range * (b - a)
         n_bins = 100
@@ -39,9 +43,10 @@ def make_logrew_histograms(logrews_random, logrews_gen, logrews_gt, exp_path, la
         
         
     fig.suptitle('logrews distribution') 
+    
     fig.legend(['random', 'generated','ground truth'], loc='upper right')
     plt.tight_layout() 
-    plt.savefig(f"{exp_path}_{label}.png")
+    plt.savefig(f"logrewshist_{exp_path}_{label}.png")
     plt.close(fig)
 
 
@@ -132,10 +137,9 @@ def make_localstructures_hist(mols_rand, mols_gen, mols_md, exp_path, label):
     fig, axs = plt.subplots(1, 3, figsize=(18, 6))
 
     # Plot bond lengths histogram
-
-    bond_lengths_rand = get_bond_lengths(mols_rand)
-    bond_lengths_gen = get_bond_lengths(mols_gen)
-    bond_lengths_md = get_bond_lengths(mols_md)
+    bond_lengths_rand = torch.stack([get_bond_lengths(mol) for mol in mols_rand[smi]]).flatten()
+    bond_lengths_gen = torch.stack([get_bond_lengths(mol) for mol in mols_gen[smi]]).flatten()
+    bond_lengths_md = torch.stack([get_bond_lengths(mol) for mol in mols_md[smi]]).flatten()
     axs[0].hist(bond_lengths_rand, bins=100, color='blue', alpha=0.5, label = 'rand')
     axs[0].hist(bond_lengths_gen, bins=100, color='red', alpha=0.5, label = 'gen')
     axs[0].hist(bond_lengths_md, bins=100, color='green', alpha=0.5, label = 'md')
@@ -145,9 +149,9 @@ def make_localstructures_hist(mols_rand, mols_gen, mols_md, exp_path, label):
     
     
     # Plot bond angles histogram
-    bond_angles_rand = get_bond_angles(mols_rand)
-    bond_angles_gen = get_bond_angles(mols_gen)
-    bond_angles_md = get_bond_angles(mols_md)
+    bond_angles_rand = torch.stack([get_bond_angles(mol) for mol in mols_rand[smi]]).flatten()
+    bond_angles_gen = torch.stack([get_bond_angles(mol) for mol in mols_gen[smi]]).flatten()
+    bond_angles_md = torch.stack([get_bond_angles(mol) for mol in mols_md[smi]]).flatten()
     axs[1].hist(bond_angles_rand, bins=100, color='blue', alpha=0.5, label = 'rand')
     axs[1].hist(bond_angles_gen, bins=100, color='red', alpha=0.5, label = 'gen')
     axs[1].hist(bond_angles_md, bins=100, color='green', alpha=0.5, label = 'md')
@@ -156,9 +160,9 @@ def make_localstructures_hist(mols_rand, mols_gen, mols_md, exp_path, label):
     axs[1].legend()
     
     # Plot torsion angles histogram
-    torsion_angles_rand = get_torsion_angles(mols_rand)
-    torsion_angles_gen = get_torsion_angles(mols_gen)
-    torsion_angles_md = get_torsion_angles(mols_md)
+    torsion_angles_rand = torch.stack([get_torsion_angles(mol) for mol in mols_rand[smi]]).flatten()
+    torsion_angles_gen = torch.stack([get_torsion_angles(mol) for mol in mols_gen[smi]]).flatten()
+    torsion_angles_md = torch.stack([get_torsion_angles(mol) for mol in mols_md[smi]]).flatten()
     axs[2].hist(torsion_angles_rand, bins=100, color='blue', alpha=0.5, label = 'rand')
     axs[2].hist(torsion_angles_gen, bins=100, color='red', alpha=0.5, label = 'gen')
     axs[2].hist(torsion_angles_md, bins=100, color='green', alpha=0.5, label = 'md')
@@ -353,3 +357,4 @@ def kl_div_histogram(px: NDArray, qx: NDArray, n: int = 32) -> float:
     q = qh / qh.sum()
     kl = p * (np.log(p) - np.log(q))
     return kl.sum()
+

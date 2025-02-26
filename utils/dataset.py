@@ -1,7 +1,7 @@
 import os.path
 from multiprocessing import Pool
 from diffusion.likelihood import mmff_energy
-from rdkit import Chem
+from rdkit import Chem, Geometry
 from rdkit.Chem import AllChem
 import numpy as np
 import glob, pickle, random
@@ -11,12 +11,122 @@ import copy
 from torch_geometric.data import Dataset, DataLoader
 from torch_geometric.transforms import BaseTransform
 from collections import defaultdict
+from copy import deepcopy
 
 from utils.featurization import dihedral_pattern, featurize_mol, qm9_types, drugs_types
 from utils.torsion import get_transformation_mask, modify_conformer
 
-from diffusion.sampling import get_seed, embed_seeds
+from utils.featurization import featurize_mol, featurize_mol_from_smiles
 
+
+
+still_frames = 10
+
+
+def try_mmff(mol):
+    try:
+        AllChem.MMFFOptimizeMoleculeConfs(mol, mmffVariant='MMFF94s')
+        return True
+    except Exception as e:
+        return False
+
+def get_seed(smi, seed_confs=None, dataset='drugs'):
+    if seed_confs:
+        if smi not in seed_confs:
+            print("smile not in seeds", smi)
+            return None, None
+        mol = seed_confs[smi][0]
+        data = featurize_mol(mol, dataset)
+
+    else:
+        mol, data = featurize_mol_from_smiles(smi, dataset=dataset)
+        if not mol:
+            return None, None
+        else:
+            data.edge_mask, data.mask_rotate = get_transformation_mask(mol, data)
+            if hasattr(data, 'edge_mask'): # ie we have at least one rotatable bond
+                data.edge_mask = torch.tensor(data.edge_mask)
+            return mol, data
+
+
+def embed_seeds(mol, data, n_confs, single_conf=False, smi=None, embed_func=None, seed_confs=None, pdb=None, mmff=False):
+    if not seed_confs:
+        embed_num_confs = n_confs if not single_conf else 1
+        try:
+            mol = embed_func(mol, embed_num_confs)
+        except Exception as e:
+            print(e.output)
+            pass
+        if len(mol.GetConformers()) != embed_num_confs:
+            print(len(mol.GetConformers()), '!=', embed_num_confs)
+            return [], None
+        if mmff: try_mmff(mol)
+
+    if pdb: pdb = PDBFile(mol)
+    conformers = []
+    for i in range(n_confs):
+        data_conf = copy.deepcopy(data)
+        if single_conf:
+            seed_mol = copy.deepcopy(mol)
+        elif seed_confs:
+            seed_mol = random.choice(seed_confs[smi])
+        else:
+            seed_mol = copy.deepcopy(mol)
+            [seed_mol.RemoveConformer(j) for j in range(n_confs) if j != i]
+
+        data_conf.pos = torch.from_numpy(seed_mol.GetConformers()[0].GetPositions()).float()
+        #data_conf.seed_mol = copy.deepcopy(seed_mol) (original)
+        data_conf.mol = copy.deepcopy(seed_mol)
+        if pdb:
+            pdb.add(data_conf.pos, part=i, order=0, repeat=still_frames)
+            if seed_confs:
+                pdb.add(data_conf.pos, part=i, order=-2, repeat=still_frames)
+            pdb.add(torch.zeros_like(data_conf.pos), part=i, order=-1)
+
+        conformers.append(data_conf)
+    if mol.GetNumConformers() > 1:
+        [mol.RemoveConformer(j) for j in range(n_confs) if j != 0]
+    return conformers, pdb
+
+
+def perturb_seeds(data, pdb=None): # CAREFUL: this function changes the data object itself with the perturbations
+    for i, data_conf in enumerate(data):
+        torsion_updates = np.random.uniform(low=-np.pi,high=np.pi, size=data_conf.edge_mask.sum())
+        data_conf.pos = modify_conformer(data_conf.pos, data_conf.edge_index.T[data_conf.edge_mask],
+                                         data_conf.mask_rotate, torsion_updates)
+        data_conf.total_perturb = torch.Tensor(torsion_updates) % (2 * np.pi)
+        if pdb:
+            pdb.add(data_conf.pos, part=i, order=1, repeat=still_frames)
+    return data
+
+
+def pyg_to_mol(mol, data, mmff=False, rmsd=True, copy=True):
+    if not mol.GetNumConformers(): 
+        conformer = Chem.Conformer(mol.GetNumAtoms())
+        mol.AddConformer(conformer)
+    coords = data.pos
+    if type(coords) is not np.ndarray:
+        coords = coords.double().cpu().numpy()
+    for i in range(coords.shape[0]):
+        #mol.GetConformer(0).SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))
+        mol.GetConformer().SetAtomPosition(i, Geometry.Point3D(coords[i, 0], coords[i, 1], coords[i, 2]))
+    if mmff:
+        try:
+            AllChem.MMFFOptimizeMoleculeConfs(mol, mmffVariant='MMFF94s')
+        except Exception as e:
+            pass
+    try:
+        if rmsd:
+            mol.rmsd = AllChem.GetBestRMS(
+                Chem.RemoveHs(data.seed_mol),
+                Chem.RemoveHs(mol)
+            )
+        mol.total_perturb = data.total_perturb
+    except:
+        pass
+    mol.n_rotable_bonds = data.edge_mask.sum()
+    if not copy: return mol
+    return deepcopy(mol)
 
 class TorsionNoiseTransform(BaseTransform):
     def __init__(self, sigma_min=0.01 * np.pi, sigma_max=np.pi, boltzmann_weight=False):
@@ -306,7 +416,18 @@ def embed_func(mol, numConfs):
     AllChem.EmbedMultipleConfs(mol, numConfs=numConfs)
     return mol
 
-def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func, init_positions_path = None):
+def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func, init_positions_path = None, n_local_structures = 1 ):
+    '''
+    Construct a dataset from a list of smiles strings.
+    Args:
+        smiles: list of smiles strings
+        optimize_mmff: whether to optimize the conformers with MMFF
+        embed_func: function to generate rdkit mol from smi
+        init_positions_path: path to the initial positions of conformers (e.g. md simulations/random positions/etc..)
+        n_local_structures: number of local structures per smile
+    Returns:
+        conformers: list of sublists of conformers for each smile. Each sublist contains n_local_structures conformers, i.e. with different initial bond lengths/angles.
+    '''
     conformers = []
     for smi in smiles:
         mol, data = get_seed(smi)
@@ -315,13 +436,15 @@ def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func
         elif data.mask_rotate.sum() == 0:
             print('No rotatable bonds for ', smi)
         else:
-            conf , _ = embed_seeds(mol, data, n_confs=1, single_conf=True, pdb=None, embed_func=embed_func, mmff=optimize_mmff)
+            confs , _ = embed_seeds(mol, data, n_confs = n_local_structures, single_conf=True if n_local_structures ==1 else False, pdb=None, embed_func=embed_func, mmff=optimize_mmff)
             if init_positions_path is not None:
                 with open(init_positions_path, 'rb') as f:
                     init_positions = pickle.load(f)
-                num_pos = len(init_positions[smi])
-                pos_ix = random.randint(0, num_pos-1) # sample one position from dataset
-                conf.pos = init_positions[smi][pos_ix]
-            conformers += conf
+                positions = init_positions[ smi] * 10  # nanometers to angstroms
+                pos_ix = np.random.randint(0, len(positions) , size = n_local_structures) # sample one position from dataset
+                for i, conf in enumerate(confs):
+                    conf.pos = torch.Tensor(positions[pos_ix[i]]) 
+                    conf.total_perturb = torch.zeros(conf.mask_rotate.shape[0])
+            conformers += [confs]
 
     return conformers
