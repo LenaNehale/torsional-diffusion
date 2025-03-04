@@ -74,7 +74,7 @@ def train(args, model, optimizer):
                     replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/replay_buffer'
                     if not os.path.exists(replaybuffer_path):
                         os.makedirs(replaybuffer_path)
-                    positions_dict, tas_dict = ReplayBuffer.get_positions(train_smis)
+                    positions_dict, tas_dict = ReplayBuffer.get_positions_and_tas(train_smis)
                     pickle.dump([positions_dict, tas_dict], open(f'{replaybuffer_path}/{exp_path}.pkl', 'wb'))
                     print('replay buffer positions and tas saved!')
     

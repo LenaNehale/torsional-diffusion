@@ -14,43 +14,44 @@ def parse_train_args():
     #parser.add_argument('--restart_dir', default=SCRATCH / 'torsional-diffusion/workdir/boltz_T300' ,  type=str, help='Folder of previous training model from which to restart')
     parser.add_argument('--restart_dir', default = None ,  type=str, help='Folder of previous training model from which to restart')
     parser.add_argument('--cache', type=str, default=SCRATCH / 'torsional-diffusion/cache/test_run', help='Folder from where to load/restore cached dataset')
-    parser.add_argument('--data_dir', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
-    parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
-    parser.add_argument('--n_local_structures', type=int, default=32, help= 'Number of local structures per smile to sample')  
-    parser.add_argument('--max_n_local_structures', type=int, default=2001, help= 'Max Number of local structures per smile to sample from')  #TODO  set to +inf for mle/diffusion!
-
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
-    parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
+    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
 
     
-    #GflowNet arguments
-    parser.add_argument('--train_smis', type=str, default=   "CC(C)C=C COc1ccccc1 CCCCCBr CCOC(=O)c1ccc(cc1)O CC(C)CO CC(C)O CCOP(=S)(OCC)SCSCC CC=C(C)C CCCCCCBr CCOC(=O)c1ccccc1 COc1cccc(c1O)OC COC(OC)OC CCCCC(=O)OCC CC(C)(C)C(=O)OC CCC[C@@H](C)O CC(C)OC(C)C COc1ccccc1N CCCCCCCCC=O CC(=CCC/C(=C/CO)/C)C CCCCCCl CC[C@H](C)c1ccccc1 CCCCCCCC(=O)C CCOC(=O)CCC(=O)OCC CC(C)COC(=O)C CC[C@H](C)O CC(=C)C=C CCSC CC(=O)OCC(COC(=O)C)OC(=O)C CC(C)CCO CC[C@H](C(C)C)O CCCc1ccc(c(c1)OC)O CCCCCCCC(=O)OC CC(=CCC/C(=C\\CO)/C)C Cn1cnc2c1c(=O)n(c(=O)n2C)C Cc1cccc(c1C)O C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl COc1ccccc1OC CC(C)(C)Br CC(C)CCOC=O Cc1cc2ccccc2cc1C C1[C@H]([C@@H]([C@H]([C@H](O1)O)O)O)O CCCCC=O CCCc1ccccc1 CC(C)c1ccccc1 CCCCCCN CCCOCCC C[C@@H]1CCCC[C@@H]1C CC(=C)c1ccccc1 CCc1cccc(c1)O C([C@H]([C@H]([C@@H]([C@@H](CO)O)O)O)O)O CCOP(=O)(OCC)OCC CC(=O)Oc1ccccc1C(=O)O CCc1cccc2c1cccc2 c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N c1ccc(c(c1)C(F)(F)F)C(F)(F)F CCCCOCCCC CC(C)(/C=N\\OC(=O)NC)SC COCC(OC)(OC)OC CN(C)C(=O)Nc1ccccc1 CCCC(C)(C)C c1cc(cc(c1)O)C#N CCOCCO c1ccc(cc1)O[C@@H](C(F)F)F CCC c1ccc(cc1)CCCO COC(=O)C(F)(F)F CCS CC(C)(C)C C[C@H](CC(C)C)O CCC(C)CC CCCCCCC COC=O"  , help='train SMILES strings for which to generate conformers')
+    #data arguments      
+    parser.add_argument('--data_dir', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
+    parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
+    parser.add_argument('--train_smis', type=str, default=   "CC(C)C=C COC=O CC(=C)C=C CC(=O)OCC(COC(=O)C)OC(=O)C COc1ccccc1N CCc1cccc2c1cccc2 CC[C@H](C)c1ccccc1 COCC(OC)(OC)OC C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl CCCC(C)(C)C CCCCC=O Cc1cccc(c1C)O CCCOCCC C[C@@H]1CCCC[C@@H]1C CCOP(=S)(OCC)SCSCC CC(C)COC(=O)C CCCCCCC CC(C)O C[C@H](CC(C)C)O CCOC(=O)c1ccc(cc1)O c1cc(cc(c1)O)C#N COc1ccccc1 CCCCCCCC(=O)OC CC[C@H](C(C)C)O CC(C)(/C=N\\OC(=O)NC)SC COc1ccccc1OC CCOC(=O)c1ccccc1 CC=C(C)C CCCCC(=O)OCC CC(C)(C)Br CN(C)C(=O)Nc1ccccc1 COC(=O)C(F)(F)F CC(=O)Oc1ccccc1C(=O)O CC(C)CO CC[C@H](C)O c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N CC(=CCC/C(=C\\CO)/C)C CCCCCCl Cn1cnc2c1c(=O)n(c(=O)n2C)C CCS CC(C)CCO CCCc1ccccc1 CCCCCCBr CCC CC(C)CCOC=O C1[C@H]([C@@H]([C@H]([C@H](O1)O)O)O)O C([C@H]([C@H]([C@@H]([C@@H](CO)O)O)O)O)O CCCCCCN c1ccc(cc1)O[C@@H](C(F)F)F CCC(C)CC CC(=CCC/C(=C/CO)/C)C CCOCCO CC(=C)c1ccccc1 COc1cccc(c1O)OC CC(C)c1ccccc1 CCOP(=O)(OCC)OCC CC(C)(C)C(=O)OC CC(C)OC(C)C Cc1cc2ccccc2cc1C CCCCCCCCC=O c1ccc(cc1)CCCO c1ccc(c(c1)C(F)(F)F)C(F)(F)F COC(OC)OC CCCCCBr CCOC(=O)CCC(=O)OCC CCCCOCCCC CCc1cccc(c1)O CC(C)(C)C CCCCCCCC(=O)C CCC[C@@H](C)O CCCc1ccc(c(c1)OC)O CCSC"  , help='train SMILES strings for which to generate conformers')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
-
+    parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
+    parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  
+    parser.add_argument('--max_n_local_structures', type=int, default=1, help= 'Max Number of local structures per smile to sample from')  #TODO  set to +inf for mle/diffusion!
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
-    parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
+    
+    
+    
+    #gflownet arguments
+    parser.add_argument('--train_mode', type=str, default='mle', help='Training mode for GflowNets')
+    parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
-    parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
+    parser.add_argument('--p_replay', type=float, default=0.1, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
-    parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
+    parser.add_argument('--batch_size_train', type=int, default=32, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=32, help='Batch size for evaluation')
-    parser.add_argument('--n_smis_batch', type=int, default=2, help='Number of SMILES strings per batch')
+    parser.add_argument('--n_smis_batch', type=int, default=5, help='Number of SMILES strings per batch')
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
     parser.add_argument('--num_points', type=int, default=10, help='Number of points for evaluation')
     parser.add_argument('--num_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
-    parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
     
 
 
-    # Training arguments
-    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
-    parser.add_argument('--log_gfn_metrics', action='store_true', default=False, help='Whether to log GFN metrics')
+    # other training arguments
     parser.add_argument('--n_epochs', type=int, default=250, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')

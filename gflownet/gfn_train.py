@@ -410,7 +410,7 @@ def vargrad_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sig
     return Batch.to_data_list(data), grad, logit_pf, logit_pb, logrews
 
 
-def mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  steps, likelihood=False):
+def mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  steps, likelihood=False, use_logit_pb = False):
     
     if logit_pf is None or logit_pb is None: 
         logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=likelihood, train=False)
@@ -419,8 +419,7 @@ def mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_m
         #assert all(x == data.name[0] for x in data.name)
         assert all( data[i].canonical_smi == data[0].canonical_smi for i in range(len(data)))
     except:
-        raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
-    #TODO: Make gradacc for mle for different mols!
+        raise ValueError( "mle loss should be computed for the same molecule only ! Otherwise we have different logZs" )
 
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
     eps = 1 / steps
@@ -448,7 +447,10 @@ def mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_m
         logit_pb_local = torch.log(p_trajs_backward).reshape(-1, n_torsion_angles).sum(dim = -1)
 
         # Get gradient of logit_pf with respect to parameters
-        grad_f = torch.autograd.grad((logit_pf_local - logit_pb_local).mean(), model.parameters(), retain_graph=True, allow_unused=True)
+        if use_logit_pb:
+            grad_f = torch.autograd.grad( - (logit_pf_local - logit_pb_local).mean(), model.parameters(), retain_graph=True, allow_unused=True)
+        else:
+            grad_f = torch.autograd.grad( - (logit_pf_local).mean(), model.parameters(), retain_graph=True, allow_unused=True)
         if grad is None:
             grad = list(grad_f)
         else:
@@ -538,7 +540,8 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
     logrews = []
     total_perturbs = []
     trajs = []
-
+    rmsds_precision = []
+    rmsds_recall = []
     
     for i in range(len(dataset)):
         smi  = dataset[i][0].canonical_smi
@@ -607,7 +610,15 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             # sample backward trajectories. Samples in gt_data don't need to have the same local structure
             traj = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
             #traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
-            logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
+            logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
+            if grad_acc:
+                grad, logit_pf, logit_pb = mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  steps, likelihood=False, use_logit_pb = False)
+                for param, g in zip(model.parameters(), grad):
+                    if g is not None:
+                        if param.grad is None:
+                            param.grad = g / len(dataset)
+                        else:
+                            param.grad += g / len(dataset)
             #logit_pf_bis, logit_pb_bis, logp_bis = get_log_p_f_and_log_pb(traj_bis, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
             loss_kl = - logit_pf.mean()
             #loss_consistency = torch.pow(logit_pf.detach() - logit_pb - logit_pf_bis + logit_pb_bis, 2).mean()
@@ -617,6 +628,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                     #wandb.log({'KL loss': loss_kl.item()})
                     #wandb.log({'consistency loss': loss_consistency.item()})
             loss_smile = loss_kl + 0.0 *loss_consistency
+
 
             
             #confs = gt_data
@@ -637,11 +649,11 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in dataset[i]]
         gen_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in confs]
         rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(len(gen_mols))], gen_mols) for i in range(len(gt_mols))]) #n_gen, n_gt
-        rmsds_precision = np.min(rmsds, axis=0)
-        rmsds_recall = np.min(rmsds, axis=1)
+        rmsd_precision = np.min(rmsds, axis=0)
+        rmsd_recall = np.min(rmsds, axis=1)
         if use_wandb:
-            wandb.log({f"RMSD precision {smi}": np.mean(rmsds_precision).item()})
-            wandb.log({f"RMSD recall {smi}": np.mean(rmsds_recall).item()})
+            wandb.log({f"RMSD precision {smi}": np.mean(rmsd_precision).item()})
+            wandb.log({f"RMSD recall {smi}": np.mean(rmsd_recall).item()})
 
         if use_wandb:
             wandb.log({f'logrew mean {smi}': logrew.mean().item()})
@@ -651,6 +663,8 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         logit_pfs.append(logit_pf.detach() if logit_pf is not None else None)
         logit_pbs.append(logit_pb)
         logrews.append(logrew)
+        rmsds_precision.append(rmsd_precision)
+        rmsds_recall.append(rmsd_recall)
         
         if train_mode == 'gflownet' :
             total_perturbs.append(traj[-1].total_perturb)
@@ -660,7 +674,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
     
     
     if train:
-        if train_mode != 'gflownet' or (  train_mode == 'gflownet' and grad_acc == False): 
+        if train_mode == 'diffusion' or ( grad_acc == False): 
             torch.stack(loss_tot).mean().backward()  
         optimizer.step()          
     torch.cuda.empty_cache()
@@ -670,7 +684,9 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             loss_type = dict[train_mode]
             wandb.log({loss_type: torch.stack(loss_tot).mean().item()})
 
-            wandb.log({f'logrew total': torch.cat(logrews).mean().item()})
+            wandb.log({f'logrew batch': torch.cat(logrews).mean().item()})
+            wandb.log({f'rmsds precision batch': np.mean(rmsds_precision).item()})
+            wandb.log({f'rmsds recall batch': np.mean(rmsds_recall).item()})
     
     
 
