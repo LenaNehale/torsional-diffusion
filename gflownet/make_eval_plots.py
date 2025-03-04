@@ -1,12 +1,20 @@
-from utils.eval_plots import *
+from utils.mols_invariant_feats import *
 from utils.dataset import make_dataset_from_smi
-from gflownet.gfn_train import gfn_sgd
+from gflownet.gfn_train import gfn_sgd, get_logpT, get_logrew
 from diffusion.score_model import TensorProductScoreModel
 from utils.dataset import perturb_seeds, pyg_to_mol
 from gflownet.gfn_train import get_logrew
 from torch_geometric.data import Data, Batch
 import pickle
 from copy import deepcopy
+from utils.torsion import modify_conformer
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+
+
+
 
 
 def load_model(exp_path, device):
@@ -19,7 +27,7 @@ def load_model(exp_path, device):
                                     residual=True, batch_norm=True)
 
 
-    model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFNmodel_chkpts"
+    model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"
 
     model_dir = f"{model_path}/{exp_path}.pt"
     state_dict = torch.load(f'{model_dir}', map_location= torch.device('cuda'))
@@ -29,7 +37,7 @@ def load_model(exp_path, device):
     return model
 
 
-def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, logrew_clamp, energy_fn, device, sigma_min, sigma_max, init_positions_path = None, n_local_structures = 1): 
+def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, logrew_clamp, energy_fn, device, sigma_min, sigma_max, init_positions_path = None, n_local_structures = 1, train_mode = 'gflownet'): 
  
     
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
@@ -51,7 +59,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
     for i in range(n_smis // n_smis_batch):
         smis_subset = smis[n_smis_batch * i : n_smis_batch * (i + 1) ]
         print('smis subset', smis_subset)
-        confs_rdkit_from_smi = make_dataset_from_smi(smis_subset, init_positions_path = "/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", n_local_structures = 1 )
+        confs_rdkit_from_smi = make_dataset_from_smi(smis_subset, init_positions_path = init_positions_path, n_local_structures = n_local_structures)
         train_loss, conformers_gen_subset, logit_pfs, logit_pbs, logrews_gen_subset, perturbs, trajs = gfn_sgd(model, 
                                                                                     confs_rdkit_from_smi  , 
                                                                                     optimizer, 
@@ -64,7 +72,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
                                                                                     T=T, 
                                                                                     logrew_clamp = logrew_clamp, 
                                                                                     energy_fn = energy_fn, 
-                                                                                    train_mode='gflownet', 
+                                                                                    train_mode=train_mode, 
                                                                                     use_wandb = False, 
                                                                                     ReplayBuffer = None, 
                                                                                     p_expl = 0.0, 
@@ -90,7 +98,9 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
 
         logZ = torch.logsumexp(torch.stack(logit_pbs) + torch.stack(logrews_gen_subset) - torch.stack(logit_pfs), dim = 1) - np.log(len(logit_pfs[0])).item() #TODO verifier qu'on rajoute la bonne constante?
         logZ = logZ - np.log(sigma_min).item() + np.log(sigma_max).item()
+        print('logZ', logZ) 
         logZs_hat.append(logZ)
+        print('logZs_hat', logZs_hat)
         
 
     pos_md, logrews_md, mols_md = pickle.load(open("data/pos_md.pkl", 'rb')), pickle.load(open("data/logrews_md.pkl", 'rb')), pickle.load(open("data/mols_md.pkl", 'rb'))
@@ -117,10 +127,52 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
 
 
 
-from gflownet.gfn_train import get_logpT, get_logrew
+def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs, T, get_pt = True):
+    '''
+    Get 2Denergy heatmap and logpT heatmap. Both are obtained by computing the energy for different values (linspace) of the 2 torsion angles ix0 and ix1, while fixing the other torsion angles.
+    Args:
+    - data: pytorch geometric data object representing a conformer
+    - model: score model
+    - sigma_min, sigma_max: noise variance at timesetps (0,T)
+    - steps: number of timesteps
+    - device: cuda or cpu
+    - num_points: number of points in the linspace
+    - ix0, ix1: indices of the torsion angles to vary
+    - energy_fn: energy function to use (mmff or dummy)
+    Returns:
+    - energy_landscape: 2D array of energy values
+    - logpTs: 2D array of logpT values
+    '''
+    torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points)
+    energy_landscape = []
+    datas = []
+    logpTs = []
+    if hasattr(data, 'total_perturb') == False:
+        data.total_perturb = torch.zeros( data.mask_rotate.shape[0])
+    assert torch.abs(data.total_perturb).max() == 0
+    for theta0 in torsion_angles_linspace:
+        datas.append([])
+        energy_landscape.append([])
+        for theta1 in torsion_angles_linspace:
+            data0 = deepcopy(data)
+            torsion_update = np.zeros(len(data0.mask_rotate))
+            torsion_update[ix0], torsion_update[ix1] = theta0, theta1
+            new_pos = modify_conformer(data0.pos, data0.edge_index.T[data0.edge_mask], data0.mask_rotate, torsion_update, as_numpy=False) #change the value of the 1st torsion angle
+            data0.pos = new_pos
+            data0.total_perturb = torch.tensor(torsion_update) % (2 * np.pi)
+            #if torch.abs(torch.tensor(torsion_update) % (2 * np.pi) - torch.tensor(torsion_update)).max() > 0 : 
+                #breakpoint()
+            datas[-1].append(deepcopy(data0))
+            energy_landscape[-1].append( - get_logrew(data0, energy_fn = energy_fn, T = T).item())
+        if get_pt:
+            logpT = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device, ode, num_trajs)
+            logpT = logpT.tolist()
+            logpTs.append(logpT)
+    return energy_landscape, logpTs
 
 
-def get_correlations(confs, model, sigma_min, sigma_max,  steps, device, num_trajs, energy_fn, logrew_clamp, exp_path, n_subplots = 5): 
+
+def get_correlations(confs, model, T, sigma_min, sigma_max,  steps, device, num_trajs, energy_fn, logrew_clamp, exp_path, n_subplots = 5): 
     '''
     Args:
     - confs: dictionary where keys are smiles and values are lists of pytorch geometric conformers
@@ -149,7 +201,105 @@ def get_correlations(confs, model, sigma_min, sigma_max,  steps, device, num_tra
     plt.savefig(f"correlations_{exp_path}.png")
     plt.close(fig)
     return corrs
+
+def make_logrew_histograms(generated_stuff, exp_path, label, range = 2):
+    '''
+    Plots histograms of logrews for generated, ground truth and random conformers, for the same set of smis.
+    Args:
+        - logrews_gen: dictionary where keys are smiles and values are tensors of logrews for generated conformers
+        - logrews_gt: dictionary where keys are smiles and values are tensors of logrews for ground truth conformers
+        - logrews_random: dictionary where keys are smiles and values are tensors of logrews for random conformers
+    Returns:
+        A figure of shape (n_smis // 5, 5) where each subplot coresponds to a different smile and shows the histograms of logrews for generated, ground truth and random conformers.
+
+    '''
+    
+    
+    
+    logrews_random, logrews_gen, logrews_gt = generated_stuff['logrews']    
+    
+    
+    
+    assert logrews_gen.keys() == logrews_random.keys() == logrews_gt.keys()
+    smis = logrews_gen.keys()
+    n_smis = len(smis)
+    n_subplots = 5 # number of subplots per row
+    fig, axes = plt.subplots(max(n_smis // n_subplots, 2), n_subplots, figsize=(10, 5))
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([[axes]])
+
+    for smi_idx, smi in enumerate(smis):
+
+        a , b = torch.Tensor(logrews_gt[smi]).min().item() ,  torch.Tensor(logrews_gt[smi]).max().item()
+        range_min = a - range * (b - a)
+        range_max = b + range * (b - a)
+        n_bins = 100
+        axes[ smi_idx // n_subplots , smi_idx % n_subplots ].hist(  logrews_random[smi], np.linspace(range_min, range_max, n_bins) , alpha=0.5, color='r', label = 'random', density=True)
+        axes[ smi_idx // n_subplots , smi_idx % n_subplots ].hist(logrews_gen[smi], np.linspace(range_min, range_max, n_bins) , alpha=0.5, color='b', label = 'generated', density=True)
+        axes[ smi_idx //n_subplots , smi_idx % n_subplots ].hist(logrews_gt[smi], np.linspace(range_min, range_max, n_bins) , alpha=0.5, color='g', label = 'ground truth', density=True)
+        axes[smi_idx // n_subplots, smi_idx % n_subplots].set_title(smi)
         
+        
+    fig.suptitle('logrews distribution') 
+    
+    fig.legend(['random', 'generated','ground truth'], loc='upper right')
+    plt.tight_layout() 
+    plt.savefig(f"logrewshist_{exp_path}_{label}.png")
+    plt.close(fig)
+
+
+
+def make_localstructures_histograms(generated_stuff, exp_path, label):
+    '''
+    Plots histograms of bond lengths, bond angles and torsion angles for generated, ground truth and random molecules, for the same set of smis.
+    Args:
+    '''
+    
+    mols_rand, mols_gen, mols_md = generated_stuff['mols']
+    smis = list(mols_rand.keys())
+    assert mols_gen.keys() == mols_rand.keys() == mols_md.keys()
+    fig, axs = plt.subplots(max(len(smis),2), 3, figsize=(18, 6))
+    for i, smi in enumerate(smis):
+        # Plot bond lengths histogram
+        bond_lengths_rand = torch.stack([get_bond_lengths(mol) for mol in mols_rand[smi]]).flatten()
+        bond_lengths_gen = torch.stack([get_bond_lengths(mol) for mol in mols_gen[smi]]).flatten()
+        bond_lengths_md = torch.stack([get_bond_lengths(mol) for mol in mols_md[smi]]).flatten()
+        axs[i, 0].hist(bond_lengths_rand, bins=100, color='blue', alpha=0.5, label = 'rand', density=True)
+        axs[i, 0].hist(bond_lengths_gen, bins=100, color='red', alpha=0.5, label = 'gen', density=True)
+        axs[i, 0].hist(bond_lengths_md, bins=100, color='green', alpha=0.5, label = 'md', density=True)
+        axs[i, 0].set_title('Bond Lengths')
+        axs[i, 0].set_ylabel('Frequency')
+        axs[i, 0].legend()
+        
+        
+        # Plot bond angles histogram
+        bond_angles_rand = torch.stack([get_bond_angles(mol) for mol in mols_rand[smi]]).flatten()
+        bond_angles_gen = torch.stack([get_bond_angles(mol) for mol in mols_gen[smi]]).flatten()
+        bond_angles_md = torch.stack([get_bond_angles(mol) for mol in mols_md[smi]]).flatten()
+        axs[i, 1].hist(bond_angles_rand, bins=100, color='blue', alpha=0.5, label = 'rand', density=True)
+        axs[i, 1].hist(bond_angles_gen, bins=100, color='red', alpha=0.5, label = 'gen', density=True)
+        axs[i, 1].hist(bond_angles_md, bins=100, color='green', alpha=0.5, label = 'md', density=True)
+        axs[i, 1].set_title('Bond Angles')
+        axs[i, 1].set_ylabel('Frequency')
+        axs[i, 1].legend()
+        
+        # Plot torsion angles histogram
+        torsion_angles_rand = torch.stack([get_torsion_angles(mol) for mol in mols_rand[smi]]).flatten()
+        torsion_angles_gen = torch.stack([get_torsion_angles(mol) for mol in mols_gen[smi]]).flatten()
+        torsion_angles_md = torch.stack([get_torsion_angles(mol) for mol in mols_md[smi]]).flatten()
+        axs[i, 2].hist(torsion_angles_rand, bins=100, color='blue', alpha=0.5, label = 'rand', density=True)
+        axs[i, 2].hist(torsion_angles_gen, bins=100, color='red', alpha=0.5, label = 'gen', density=True)
+        axs[i, 2].hist(torsion_angles_md, bins=100, color='green', alpha=0.5, label = 'md', density=True)
+        axs[i, 2].set_title('Torsion Angles')
+        axs[i, 2].set_ylabel('Frequency')
+        axs[i, 2].legend()
+    
+    plt.tight_layout()
+    plt.savefig(f"localstructures_{exp_path}_{label}.png")
+    plt.close(fig)
+
+
+
 
 
 '''

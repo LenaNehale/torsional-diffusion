@@ -12,7 +12,6 @@ from torch_geometric.data import Batch
 import torch_geometric
 
 
-
 from scipy.stats import multivariate_normal
 import random
 import itertools
@@ -50,7 +49,12 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
             data[item[0]] = data[item[0]].to(device)
     #data.total_perturb = torch.zeros(len(data)* data.mask_rotate[0].shape[0])
     bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
+    if step_start == None: 
+        step_start = 0
+    if step_end == None:
+        step_end = steps
     sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1 )
+    sigma_schedule = sigma_schedule[step_start:step_end + 1]
     eps = 1 / steps
     traj = [copy.deepcopy(data)]
     #mols = [[pyg_to_mol(data.mol[i], data[i], copy=True) for i in range(bs)]]
@@ -71,7 +75,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         # Get PF and PB
         if not sample_mode:
             mean, std = g**2 * eps * score, g * np.sqrt(eps)
-            p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean), std)
+            p_trajs_forward = torus.p_differentiable((perturb.detach() - mean), std)
             logit_pf[:, sigma_idx] += torch.log(p_trajs_forward).reshape(-1, n_torsion_angles).sum(dim = -1)
             # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
             sigma_b = sigma_schedule[sigma_idx + 1]
@@ -106,7 +110,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
     return traj, logit_pf, logit_pb
 
 
-def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu")):
+def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), step_start = None , step_end = None):
     '''
     Sample backward trajectories. N.B. all conformers should come from the same molecular graph.
     Args:
@@ -120,6 +124,11 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device
     data = copy.deepcopy(Batch.from_data_list(conformers_input)).to(device)
     bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
     sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1 )
+    if step_start == None: 
+        step_start = 0
+    if step_end == None:
+        step_end = steps
+    sigma_schedule = sigma_schedule[step_start:step_end + 1]
     eps = 1 / steps
     traj = [copy.deepcopy(data)]
     for _, sigma_b in enumerate(reversed(sigma_schedule[1:])):
@@ -136,7 +145,7 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device
     traj = traj[::-1]
     return traj
 
-def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=True):
+def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=True, step_start = None , step_end = None):
     '''
     Compute the logits of forward and backward trajectories (logits are not normalized). N.B. all conformers should come from the same molecular graph.
     Args:
@@ -156,6 +165,11 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
     #print('smi:', traj[-1][0].canonical_smi)
     bs = len(traj[-1])
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
+    if step_start == None:
+        step_start = 0
+    if step_end == None:
+        step_end = steps
+    sigma_schedule = sigma_schedule[step_start:step_end + 1]
     eps = 1 / steps
     n_torsion_angles = len( traj[-1][0].total_perturb)
     logit_pf = torch.zeros(bs, len(sigma_schedule)).to(device)
@@ -334,7 +348,7 @@ def get_loss(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  ste
     '''
     return traj[-1].to_data_list(), TB_loss, logit_pf, logit_pb, logrews
 
-    
+
 
 def vargrad_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn="mmff", T=1.0, logrew_clamp = -1e5):
     
@@ -396,6 +410,58 @@ def vargrad_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sig
     return Batch.to_data_list(data), grad, logit_pf, logit_pb, logrews
 
 
+def mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  steps, likelihood=False):
+    
+    if logit_pf is None or logit_pb is None: 
+        logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=likelihood, train=False)
+    data = traj[-1]
+    try:
+        #assert all(x == data.name[0] for x in data.name)
+        assert all( data[i].canonical_smi == data[0].canonical_smi for i in range(len(data)))
+    except:
+        raise ValueError( "Vargrad loss should be computed for the same molecule only ! Otherwise we have different logZs" )
+    #TODO: Make gradacc for mle for different mols!
+
+    sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
+    eps = 1 / steps
+    n_torsion_angles = len( traj[-1][0].total_perturb) 
+    grad = None
+    for sigma_idx, sigma in enumerate(sigma_schedule[:-1]):
+        data = traj[sigma_idx].to(device)
+        data.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
+        # with torch.grad == True: 
+        with torch.set_grad_enabled(True):
+            data = model(data)
+        g = sigma * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        score = data.edge_pred
+        mean, std = g**2 * eps * score, g * np.sqrt(eps)
+        perturb = traj[sigma_idx +1 ].total_perturb - traj[sigma_idx].total_perturb
+        # compute the forward and backward (in gflownet language) transitions logprobs
+        # in forward, the new mean is obtained using the score (see above)
+        p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean), std.to(device))
+        logit_pf_local = torch.log(p_trajs_forward).reshape(-1, n_torsion_angles).sum(dim = -1)
+        # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
+        sigma_b = sigma_schedule[sigma_idx + 1]
+        g_b = sigma_b * torch.sqrt( torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        std_b = g_b * np.sqrt(eps)
+        p_trajs_backward = torus.p_differentiable(perturb.detach(), std_b.to(device))
+        logit_pb_local = torch.log(p_trajs_backward).reshape(-1, n_torsion_angles).sum(dim = -1)
+
+        # Get gradient of logit_pf with respect to parameters
+        grad_f = torch.autograd.grad((logit_pf_local - logit_pb_local).mean(), model.parameters(), retain_graph=True, allow_unused=True)
+        if grad is None:
+            grad = list(grad_f)
+        else:
+            for i in range(len(grad)):
+                if grad[i] is not None and grad_f[i] is not None:
+                    grad[i] =  grad[i] + grad_f[i]
+        #Remove logit_pf from the computation graph
+        del logit_pf_local, grad_f, score, data.edge_pred, mean, p_trajs_forward
+        torch.cuda.empty_cache()
+    
+    return grad, logit_pf, logit_pb
+
+
 def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb = False):      
     '''
     Compute the diffusion loss.
@@ -433,10 +499,10 @@ def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use
     score_norm = torus.score_norm(data.edge_sigma.cpu().numpy())
     score_norm = torch.tensor(score_norm, device=pred.device)
     loss = ((score - pred) ** 2 / score_norm).mean()
-    if use_wandb : 
-        wandb.log({'gt score L1-norm': torch.abs(score).mean() })
-        wandb.log({'unnormalized diffusion loss': ((score - pred) ** 2 ).mean() })
-        wandb.log({'normalized diffusion loss': loss.item() })
+    #if use_wandb : 
+        #wandb.log({'gt score L1-norm': torch.abs(score).mean() })
+        #wandb.log({'unnormalized diffusion loss': ((score - pred) ** 2 ).mean() })
+        #wandb.log({'normalized diffusion loss': loss.item() })
     '''
     # check rmsd to ground truth data
     mols0 = [pyg_to_mol(data0.to('cpu')[i].mol, data0.to('cpu')[i], copy=True) for i in range(len(data0))]
@@ -506,8 +572,6 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             else:
                 traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
 
-            
-
             if grad_acc:
                 confs, grad, logit_pf, logit_pb, logrew = vargrad_loss_gradacc(traj_concat, logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, logrew_clamp = logrew_clamp)
                 logZ = (logit_pb + logrew/T - logit_pf).detach()
@@ -565,19 +629,19 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         
         if train_mode == 'mle' or train_mode == 'diffusion':
             # Sample on-policy for computing measures
-            samples = perturb_seeds(dataset[i] )  
-            traj_on_policy, logit_pf_on_policy, logit_pb_on_policy = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
+            samples = [copy.deepcopy(random.choice(gt_data).to(device)) for _ in range(batch_size)]
+            samples = perturb_seeds(samples) 
+            traj_on_policy, logit_pf_on_policy, logit_pb_on_policy = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = 0.0, sample_mode = False)
             confs, _, _, _, logrew = get_loss(traj_on_policy , logit_pf_on_policy, logit_pb_on_policy, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=False, loss='vargrad', logrew_clamp = logrew_clamp)
         
         gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in dataset[i]]
         gen_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in confs]
-        rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(len(gen_mols))], gen_mols) for i in range(len(gt_mols))])
-        rmsds = np.min(rmsds, axis=0)
+        rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(len(gen_mols))], gen_mols) for i in range(len(gt_mols))]) #n_gen, n_gt
+        rmsds_precision = np.min(rmsds, axis=0)
+        rmsds_recall = np.min(rmsds, axis=1)
         if use_wandb:
-            wandb.log({f"RMSDs gen/ground truth {smi}": np.mean(rmsds).item()})
-
-
-        
+            wandb.log({f"RMSD precision {smi}": np.mean(rmsds_precision).item()})
+            wandb.log({f"RMSD recall {smi}": np.mean(rmsds_recall).item()})
 
         if use_wandb:
             wandb.log({f'logrew mean {smi}': logrew.mean().item()})

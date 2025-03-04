@@ -12,14 +12,14 @@ from torch_geometric.data import Batch
 import torch_geometric
 
 
-
 from scipy.stats import multivariate_normal
 import random
 import itertools
 import wandb
 import time
 from einops import reduce, rearrange, repeat
-
+from rdkit.Chem import rdMolAlign
+from utils.standardization import fast_rmsd
 
 from gflownet.replay_buffer import concat
 
@@ -29,9 +29,9 @@ from gflownet.replay_buffer import concat
 """
 
 
-def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, p_expl, sample_mode):
+def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  steps, device, p_expl, sample_mode, step_start = None , step_end = None):
     '''
-    Sample forward trajectories.
+    Sample forward trajectories. N.B. all conformers should come from the same molecular graph.
     Args:
     - conformers_input (list): List of PyTorch geometric data objects representing conformers.
     - model (torch.nn.Module): Score model.
@@ -49,7 +49,12 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
             data[item[0]] = data[item[0]].to(device)
     #data.total_perturb = torch.zeros(len(data)* data.mask_rotate[0].shape[0])
     bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
+    if step_start == None: 
+        step_start = 0
+    if step_end == None:
+        step_end = steps
     sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1 )
+    sigma_schedule = sigma_schedule[step_start:step_end + 1]
     eps = 1 / steps
     traj = [copy.deepcopy(data)]
     #mols = [[pyg_to_mol(data.mol[i], data[i], copy=True) for i in range(bs)]]
@@ -70,7 +75,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         # Get PF and PB
         if not sample_mode:
             mean, std = g**2 * eps * score, g * np.sqrt(eps)
-            p_trajs_forward = torus.p_differentiable( (perturb.detach() - mean), std)
+            p_trajs_forward = torus.p_differentiable((perturb.detach() - mean), std)
             logit_pf[:, sigma_idx] += torch.log(p_trajs_forward).reshape(-1, n_torsion_angles).sum(dim = -1)
             # in backward, since we are in variance-exploding, f(t)=0. So the mean of the backward kernels is 0. For std, we need to use the next sigma (see https://www.notion.so/logpf-logpb-of-the-ODE-traj-in-diffusion-models-9e63620c419e4516a382d66ba2077e6e)
             sigma_b = sigma_schedule[sigma_idx + 1]
@@ -105,9 +110,9 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
     return traj, logit_pf, logit_pb
 
 
-def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
+def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), step_start = None , step_end = None):
     '''
-    Sample backward trajectories.
+    Sample backward trajectories. N.B. all conformers should come from the same molecular graph.
     Args:
     - conformers_input (list): List of PyTorch geometric data objects representing conformers.
     - sigma_min (float): Minimum noise variance at timestep 0.
@@ -119,6 +124,11 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
     data = copy.deepcopy(Batch.from_data_list(conformers_input)).to(device)
     bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
     sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1 )
+    if step_start == None: 
+        step_start = 0
+    if step_end == None:
+        step_end = steps
+    sigma_schedule = sigma_schedule[step_start:step_end + 1]
     eps = 1 / steps
     traj = [copy.deepcopy(data)]
     for _, sigma_b in enumerate(reversed(sigma_schedule[1:])):
@@ -135,9 +145,9 @@ def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps):
     traj = traj[::-1]
     return traj
 
-def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=True):
+def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=True, step_start = None , step_end = None):
     '''
-    Compute the logits of forward and backward trajectories (logits are not normalized).
+    Compute the logits of forward and backward trajectories (logits are not normalized). N.B. all conformers should come from the same molecular graph.
     Args:
     - traj (list): List of PyTorch geometric batch objects representing a batch of comformers at each timestep of the trajectory.
     - model (torch.nn.Module): Score model.
@@ -155,6 +165,11 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
     #print('smi:', traj[-1][0].canonical_smi)
     bs = len(traj[-1])
     sigma_schedule = 10 ** np.linspace(np.log10(sigma_max), np.log10(sigma_min), steps + 1)
+    if step_start == None:
+        step_start = 0
+    if step_end == None:
+        step_end = steps
+    sigma_schedule = sigma_schedule[step_start:step_end + 1]
     eps = 1 / steps
     n_torsion_angles = len( traj[-1][0].total_perturb)
     logit_pf = torch.zeros(bs, len(sigma_schedule)).to(device)
@@ -194,7 +209,7 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
 
 def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = True, num_trajs = 10):
     '''
-    Computes the log-likelihood of conformers using the reverse ODE (data -> noise)
+    Computes the log-likelihood of conformers using the reverse ODE (data -> noise).N.B. all conformers should come from the same molecular graph.
     Args:
     - conformers: list of pytorch geometric data objects representing conformers
     - model: score model
@@ -432,10 +447,10 @@ def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use
     score_norm = torus.score_norm(data.edge_sigma.cpu().numpy())
     score_norm = torch.tensor(score_norm, device=pred.device)
     loss = ((score - pred) ** 2 / score_norm).mean()
-    if use_wandb : 
-        wandb.log({'gt score L1-norm': torch.abs(score).mean() })
-        wandb.log({'unnormalized diffusion loss': ((score - pred) ** 2 ).mean() })
-        wandb.log({'normalized diffusion loss': loss.item() })
+    #if use_wandb : 
+        #wandb.log({'gt score L1-norm': torch.abs(score).mean() })
+        #wandb.log({'unnormalized diffusion loss': ((score - pred) ** 2 ).mean() })
+        #wandb.log({'normalized diffusion loss': loss.item() })
     '''
     # check rmsd to ground truth data
     mols0 = [pyg_to_mol(data0.to('cpu')[i].mol, data0.to('cpu')[i], copy=True) for i in range(len(data0))]
@@ -445,6 +460,16 @@ def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use
     '''
     return loss
 
+def get_rmsds(mols0, mols1):
+    '''
+    This function compares a set of molecules(e.g. optimized vs non optimized, gt vs generated) and returns the RMSDs between each pair (e.g. non-optimized, optimized).
+    '''
+    rmsds = []
+    for ix in range(len(mols0)):
+        mol0, mol1 = mols0[ix], mols1[ix]
+        rdMolAlign.AlignMol(mol0, mol1)
+        rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
+    return rmsds
 
 
 def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False):
@@ -475,32 +500,18 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         for i, smi in enumerate(smis):
             batch_smi = batch[i]
             batch_smi_flat = rearrange(batch_smi, 'n_local_structures  n_confs -> (n_local_structures  n_confs)') # shape: n_local_structures * n_confs
-            if grad_acc:
-                traj, logit_pf, logit_pb = sample_forward_trajs(batch_smi_flat , model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
-                if train and ReplayBuffer is not None:
-                    batch_smi_replay, _ = ReplayBuffer.sample(smi, conditions[smi], min(ReplayBuffer.get_len(conditions), int(batch_size*p_replay))) # shape: [n_local_structures, variable_list_size]
-                    batch_smi_replay_flat = batch_replay.flatten()
-                    if len(batch_smi_replay_flat.flatten()) > 0:
-                        traj_replay = sample_backward_trajs(batch_smi_replay_flat, sigma_min, sigma_max,  steps)
-                        logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
-                else:
-                    traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
+            traj, logit_pf, logit_pb = sample_forward_trajs(batch_smi_flat , model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
+            if train and ReplayBuffer is not None:
+                batch_smi_replay, _ = ReplayBuffer.sample(smi, conditions[smi], min(ReplayBuffer.get_len(conditions), int(batch_size*p_replay))) # shape: [n_local_structures, variable_list_size]
+                batch_smi_replay_flat = batch_smi_replay.flatten()
+                if len(batch_smi_replay_flat.flatten()) > 0:
+                    traj_replay = sample_backward_trajs(batch_smi_replay_flat, sigma_min, sigma_max,  steps)
+                    logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
             else:
-                traj, logit_pf, logit_pb = sample_forward_trajs(samples, model,  train = train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
-                if train and ReplayBuffer is not None:
-                    final_states_replay, _ = ReplayBuffer.sample(smi, min(ReplayBuffer.get_len(smi), int(batch_size*p_replay)))
-                    traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps)
-                    logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=train)
-                else:
-                    traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
+                traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
             
-            if ReplayBuffer is not None and len(final_states_replay) > 0:    
-                traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
-            else:
-                traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
-
-            
-
+            traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
+           
             if grad_acc:
                 confs, grad, logit_pf, logit_pb, logrew = vargrad_loss_gradacc(traj_concat, logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, logrew_clamp = logrew_clamp)
                 logZ = (logit_pb + logrew/T - logit_pf).detach()
@@ -553,6 +564,22 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
 
     if use_wandb:
         wandb.log({f'logrew mean {smi}': logrew.mean().item()})
+
+    if train_mode == 'mle' or train_mode == 'diffusion':
+        # Sample on-policy for computing measures
+        samples = perturb_seeds(dataset[i] )  
+        traj_on_policy, logit_pf_on_policy, logit_pb_on_policy = sample_forward_trajs(samples, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = 0.0, sample_mode = False)
+        confs, _, _, _, logrew = get_loss(traj_on_policy , logit_pf_on_policy, logit_pb_on_policy, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=False, loss='vargrad', logrew_clamp = logrew_clamp)
+    
+    gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in dataset[i]]
+    gen_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in confs]
+    rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(len(gen_mols))], gen_mols) for i in range(len(gt_mols))])
+    rmsds_precision = np.min(rmsds, axis=0)
+    rmsds_recall = np.min(rmsds, axis=1)
+    if use_wandb:
+        wandb.log({f"RMSD precision {smi}": np.mean(rmsds_precision).item()})
+        wandb.log({f"RMSD recall {smi}": np.mean(rmsds_recall).item()})
+
 
     loss_tot.append( loss_smile / len(dataset))
     conformers.append(confs)

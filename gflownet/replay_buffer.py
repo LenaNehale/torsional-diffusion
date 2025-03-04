@@ -3,7 +3,7 @@ import  heapq
 from torch_geometric.data import Data, Batch
 import numpy as np
 
-class ReplayBufferClass():
+class ReplayBufferClass(): #TODO make conditional on bond lengths/angles
     '''
     Replay Buffer that stores trajectories and log rewards. It is sorted such that the trajectories with the highest log rewards are at the beginning of the buffer.
     '''
@@ -32,13 +32,16 @@ class ReplayBufferClass():
         else:
             raise ValueError(f"{n} samples requested, but only {len(self.buffer_trajs)} samples available in the buffer")
         
-    def get_positions(self, smis):
+    def get_positions_and_tas(self, smis):
         positions = {smi: [] for smi in smis}
+        tas = {smi: [] for smi in smis}
         for smi in smis:
             for i in range(self.get_len(smi)):
                 conf = self.content[smi][i][0]
                 positions[smi].append(conf.pos)
-        return positions
+                tas[smi].append(conf.total_perturb)
+        return positions, tas
+    
 
 def concat(traj1, traj2):
     '''

@@ -7,10 +7,8 @@ from utils.dataset import construct_loader, make_dataset_from_smi
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
 from gflownet.gfn_train import gfn_sgd 
-from gflownet.gfn_metrics import log_gfn_metrics, log_gfn_metrics_cond
 from gflownet.replay_buffer import ReplayBufferClass
-from utils.utils import get_model, get_optimizer_and_scheduler, save_yaml_file
-from utils.boltzmann import BoltzmannResampler
+from utils.utils import get_model, get_optimizer_and_scheduler
 from argparse import Namespace 
 import copy 
 import wandb
@@ -47,7 +45,7 @@ def train(args, model, optimizer):
     else:
         ReplayBuffer = None
     seed_everything(args.seed)
-    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}"
+    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}"
     if args.limit_train_mols == 1 : 
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
@@ -57,11 +55,6 @@ def train(args, model, optimizer):
     
     print("Starting GFN training ...")
     for epoch in range(args.n_epochs):        
-        if args.log_gfn_metrics:
-            idx_val = np.random.randint(0, len(val_smis), size = args.n_smis_batch)
-            subset = make_dataset_from_smi(val_smis[idx_val], args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
-            log_gfn_metrics(model, subset, optimizer, device, args.sigma_min, args.sigma_max, args.diffusion_steps, batch_size=args.batch_size_eval, T=args.rew_temp, num_points=args.num_points, logrew_clamp=args.logrew_clamp, energy_fn=args.energy_fn, num_trajs = args.num_trajs, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, train_mode = args.train_mode, gt_data_path = args.gt_data_path, seed = args.seed)
-        
         for k in tqdm(range(args.num_sgd_steps)): 
             idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
             subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
@@ -70,7 +63,7 @@ def train(args, model, optimizer):
             if k % 100 == 0:
                 print('Saving the model ...')
                 # Save the current model in a folder model_chkpts
-                model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFNmodel_chkpts"
+                model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"
                 if not os.path.exists(f'{model_path}'):
                     os.makedirs(f'{model_path}')
                 torch.save(model.state_dict(), f'{model_path}/{exp_path}.pt')
@@ -78,12 +71,12 @@ def train(args, model, optimizer):
                 
                 print('Saving replay buffer ...')
                 if ReplayBuffer is not None:
-                    replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFNreplay_buffer'
+                    replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/replay_buffer'
                     if not os.path.exists(replaybuffer_path):
                         os.makedirs(replaybuffer_path)
-                    positions_dict = ReplayBuffer.get_positions(train_smis)
-                    pickle.dump(positions_dict, open(f'{replaybuffer_path}/{exp_path}.pkl', 'wb'))
-                print('replay buffer saved!')
+                    positions_dict, tas_dict = ReplayBuffer.get_positions(train_smis)
+                    pickle.dump([positions_dict, tas_dict], open(f'{replaybuffer_path}/{exp_path}.pkl', 'wb'))
+                    print('replay buffer positions and tas saved!')
     
         print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     
