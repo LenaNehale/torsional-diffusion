@@ -416,7 +416,7 @@ def embed_func(mol, numConfs):
     AllChem.EmbedMultipleConfs(mol, numConfs=numConfs)
     return mol
 
-def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func, init_positions_path = None, n_local_structures = 1, max_n_local_structures = np.inf):
+def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func, init_positions_path = None, n_local_structures = 15, max_n_local_structures = np.inf):
     '''
     Construct a dataset from a list of smiles strings.
     Args:
@@ -445,6 +445,7 @@ def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func
                 for i, conf in enumerate(confs):
                     conf.pos = torch.Tensor(positions[pos_ix[i]]) 
                     conf.total_perturb = torch.zeros(conf.mask_rotate.shape[0])
+                    conf.local_structure_id = pos_ix[i]
             conformers += [confs]
 
     return conformers

@@ -23,25 +23,25 @@ def parse_train_args():
     #data arguments      
     parser.add_argument('--data_dir', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
     parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
-    parser.add_argument('--train_smis', type=str, default=   "CC(C)C=C COC=O CC(=C)C=C CC(=O)OCC(COC(=O)C)OC(=O)C COc1ccccc1N CCc1cccc2c1cccc2 CC[C@H](C)c1ccccc1 COCC(OC)(OC)OC C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl CCCC(C)(C)C CCCCC=O Cc1cccc(c1C)O CCCOCCC C[C@@H]1CCCC[C@@H]1C CCOP(=S)(OCC)SCSCC CC(C)COC(=O)C CCCCCCC CC(C)O C[C@H](CC(C)C)O CCOC(=O)c1ccc(cc1)O c1cc(cc(c1)O)C#N COc1ccccc1 CCCCCCCC(=O)OC CC[C@H](C(C)C)O CC(C)(/C=N\\OC(=O)NC)SC COc1ccccc1OC CCOC(=O)c1ccccc1 CC=C(C)C CCCCC(=O)OCC CC(C)(C)Br CN(C)C(=O)Nc1ccccc1 COC(=O)C(F)(F)F CC(=O)Oc1ccccc1C(=O)O CC(C)CO CC[C@H](C)O c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N CC(=CCC/C(=C\\CO)/C)C CCCCCCl Cn1cnc2c1c(=O)n(c(=O)n2C)C CCS CC(C)CCO CCCc1ccccc1 CCCCCCBr CCC CC(C)CCOC=O C1[C@H]([C@@H]([C@H]([C@H](O1)O)O)O)O C([C@H]([C@H]([C@@H]([C@@H](CO)O)O)O)O)O CCCCCCN c1ccc(cc1)O[C@@H](C(F)F)F CCC(C)CC CC(=CCC/C(=C/CO)/C)C CCOCCO CC(=C)c1ccccc1 COc1cccc(c1O)OC CC(C)c1ccccc1 CCOP(=O)(OCC)OCC CC(C)(C)C(=O)OC CC(C)OC(C)C Cc1cc2ccccc2cc1C CCCCCCCCC=O c1ccc(cc1)CCCO c1ccc(c(c1)C(F)(F)F)C(F)(F)F COC(OC)OC CCCCCBr CCOC(=O)CCC(=O)OCC CCCCOCCCC CCc1cccc(c1)O CC(C)(C)C CCCCCCCC(=O)C CCC[C@@H](C)O CCCc1ccc(c(c1)OC)O CCSC"  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--train_smis', type=str, default=   "COc1ccccc1"  , help='train SMILES strings for which to generate conformers')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
-    parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  
+    parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  #TODO change!
     parser.add_argument('--max_n_local_structures', type=int, default=1, help= 'Max Number of local structures per smile to sample from')  #TODO  set to +inf for mle/diffusion!
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     
     
     
     #gflownet arguments
-    parser.add_argument('--train_mode', type=str, default='mle', help='Training mode for GflowNets')
+    parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
-    parser.add_argument('--p_replay', type=float, default=0.1, help='Replay probability for GflowNets')
+    parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
-    parser.add_argument('--batch_size_train', type=int, default=32, help='Batch size for training')
+    parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=32, help='Batch size for evaluation')
     parser.add_argument('--n_smis_batch', type=int, default=5, help='Number of SMILES strings per batch')
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')

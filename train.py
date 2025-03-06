@@ -6,7 +6,7 @@ from rdkit import RDLogger
 from utils.dataset import construct_loader, make_dataset_from_smi
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
-from gflownet.gfn_train import gfn_sgd 
+from gflownet.gfn_train import gfn_sgd, get_logpT
 from gflownet.replay_buffer import ReplayBufferClass
 from utils.utils import get_model, get_optimizer_and_scheduler
 from argparse import Namespace 
@@ -60,6 +60,17 @@ def train(args, model, optimizer):
             subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
             
+            if k % 5 == 0: 
+                logpTs = []
+                for smi in train_smis[idx_train]:
+                    subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)[0]
+                    logpT = get_logpT(subset, model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = True, num_trajs = 32)
+                    logpTs.append(logpT)
+
+                print('logpTs', logpTs)
+                if args.use_wandb:
+                    wandb.log({"logpT": torch.stack(logpTs).mean()})
+        
             if k % 100 == 0:
                 print('Saving the model ...')
                 # Save the current model in a folder model_chkpts
