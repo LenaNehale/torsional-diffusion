@@ -37,6 +37,9 @@ def seed_everything(seed: int):
 
 def train(args, model, optimizer):
 
+    if args.train_mode in ['diffusion', 'mle']:
+        assert args.init_positions_path is not None, 'init_positions_path must be provided for diffusion and mle training'
+
     train_smis, val_smis = np.array(args.train_smis.split()), np.array(args.val_smis.split())
     args.limit_train_mols = len(train_smis)
     print('Set up replay buffer, seed and Wandb')
@@ -45,7 +48,7 @@ def train(args, model, optimizer):
     else:
         ReplayBuffer = None
     seed_everything(args.seed)
-    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}"
+    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}_use_synthetic_aug_{args.use_synthetic_aug}"
     if args.limit_train_mols == 1 : 
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
@@ -58,18 +61,18 @@ def train(args, model, optimizer):
         for k in tqdm(range(args.num_sgd_steps)): 
             idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
             subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
-            results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc)
+            results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc, use_synthetic_aug = args.use_synthetic_aug)
             
             if k % 5 == 0: 
                 logpTs = []
                 for smi in train_smis[idx_train]:
                     subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)[0]
-                    logpT = get_logpT(subset, model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = True, num_trajs = 32)
+                    logpT = get_logpT(subset, model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = 16)
                     logpTs.append(logpT)
 
                 print('logpTs', logpTs)
                 if args.use_wandb:
-                    wandb.log({"logpT": torch.stack(logpTs).mean()})
+                    wandb.log({"logpT batch": torch.stack(logpTs).mean()})
         
             if k % 100 == 0:
                 print('Saving the model ...')

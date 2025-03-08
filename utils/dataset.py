@@ -449,3 +449,21 @@ def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func
             conformers += [confs]
 
     return conformers
+
+
+
+from utils.torsion import perturb_batch
+import itertools
+def make_synthetic_data(gt_data):
+    device = gt_data.pos.device
+    n_tas = len(gt_data.mask_rotate)
+    synthetic_data = []
+    data_cpu = copy.deepcopy(gt_data).to('cpu') 
+    for torsion_updates in itertools.product([0,1], repeat=n_tas):
+        torsion_updates = 1 + np.pi * torch.Tensor(torsion_updates)
+        data_cpu.pos = perturb_batch(data_cpu, torsion_updates)
+        data_cpu.total_perturb = torsion_updates + gt_data.total_perturb.to('cpu')
+        data = copy.deepcopy(data_cpu).to(device)
+        data.pos, data.total_perturb = data.pos.to(device), data.total_perturb.to(device)
+        synthetic_data.append(data)
+    return synthetic_data

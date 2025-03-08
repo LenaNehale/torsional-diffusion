@@ -207,7 +207,7 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
         logp = None
     return logit_pf, logit_pb, logp
 
-def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = True, num_trajs = 10):
+def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = 16):
     '''
     Computes the log-likelihood of conformers using the reverse ODE (data -> noise).N.B. all conformers should come from the same molecular graph.
     Args:
@@ -230,7 +230,7 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
         logp = torch.zeros(bs)
         #data.total_perturb = torch.zeros(bs * n_torsion_angles)
         data_gpu = copy.deepcopy(data).to(device)
-        mols = [[pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))]] # viz molecules trajs during denoising
+        #mols = [[pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))]] # viz molecules trajs during denoising
         traj = [copy.deepcopy(data)]
         for sigma_idx, sigma in enumerate(reversed(sigma_schedule[1:])):
             data_gpu.node_sigma = sigma * torch.ones(data.num_nodes, device=device)
@@ -243,12 +243,12 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
             new_pos = perturb_batch(data, perturb)
             data.pos = new_pos
             data.total_perturb = (data.total_perturb + perturb.to(data.total_perturb.device) ) % (2 * np.pi)
-            mols.append([pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))])
+            #mols.append([pyg_to_mol(data[i].mol, data[i], copy=True) for i in range(len(data))])
             #data = copy.deepcopy(conf_dataset_likelihood.data) 
             data_gpu.pos =  data.pos.to(device) # has 2 more attributes than data: edge_pred and edge_sigma
+            data_gpu.total_perturb = data.total_perturb.to(device)
             div = divergence(model, data, data_gpu, method='full') 
             logp += -0.5 * g ** 2 * eps * div
-            data_gpu.pos = data.pos.to(device)
             traj.append(copy.deepcopy(data))
         # Get rmsds of noised conformers compared to traj[-1]
         #rmsds = [get_rmsds(mols[i], mols[-1]) for i in range(len(mols))]
@@ -464,6 +464,7 @@ def mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_m
     return grad, logit_pf, logit_pb
 
 
+
 def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use_wandb = False):      
     '''
     Compute the diffusion loss.
@@ -525,7 +526,7 @@ def get_rmsds(mols0, mols1):
         rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
     return rmsds
 
-def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False):
+def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False, use_synthetic_aug = True):
     if train:
         model.train() # set model to training mode
     else:
@@ -546,6 +547,11 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
     for i in range(len(dataset)):
         smi  = dataset[i][0].canonical_smi 
         gt_data = dataset[i] # gt_data contains conformers with different local structures for each smi
+        if train_mode in ['diffusion', 'mle']:
+            if use_synthetic_aug:
+                synthetic_data = [make_synthetic_data(x) for x in gt_data]
+                synthetic_data = [x for l in synthetic_data for x in l]
+                gt_data = gt_data + synthetic_data
         if train_mode == 'gflownet':
             samples_smi = [[copy.deepcopy(x) for _ in range(batch_size) ]  for x in gt_data] # shape: len(gt_data) x batch_size
             samples_smi = [perturb_seeds(x) for x in samples_smi] # apply uniform noise to torsion angles
@@ -616,7 +622,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             #traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
             logit_pf_smi, logit_pb_smi, logp_smi = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
             if grad_acc:
-                grad, logit_pf_smi, logit_pb_smi = mle_loss_gradacc(traj, logit_pf, logit_pb, model, device, sigma_min, sigma_max,  steps, likelihood=False, use_logit_pb = False)
+                grad, logit_pf_smi, logit_pb_smi = mle_loss_gradacc(traj, logit_pf_smi, logit_pb_smi, model, device, sigma_min, sigma_max,  steps, likelihood=False, use_logit_pb = False)
                 for param, g in zip(model.parameters(), grad):
                     if g is not None:
                         if param.grad is None:

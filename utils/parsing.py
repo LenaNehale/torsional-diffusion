@@ -23,9 +23,13 @@ def parse_train_args():
     #data arguments      
     parser.add_argument('--data_dir', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
     parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
-    parser.add_argument('--train_smis', type=str, default=   "COc1ccccc1"  , help='train SMILES strings for which to generate conformers')
+    #parser.add_argument('--init_positions_path', type=str, default=None, help='Path to the initial positions of conformers')
+    parser.add_argument('--use_synthetic_aug', type=bool, default= True, help='Whether to use synthetic augmentation')
+
+    parser.add_argument('--train_smis', type=str, default=   "CC(=C)c1ccccc1"  , help='train SMILES strings for which to generate conformers')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
+    parser.add_argument('--n_smis_batch', type=int, default=1, help='Number of SMILES strings per batch')
     parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  #TODO change!
     parser.add_argument('--max_n_local_structures', type=int, default=1, help= 'Max Number of local structures per smile to sample from')  #TODO  set to +inf for mle/diffusion!
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
@@ -33,17 +37,16 @@ def parse_train_args():
     
     
     #gflownet arguments
-    parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
+    parser.add_argument('--train_mode', type=str, default='mle', help='Training mode for GflowNets')
     parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
     parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
-    parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
+    parser.add_argument('--logrew_clamp', type=float, default=-1e3, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
     parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
     parser.add_argument('--batch_size_eval', type=int, default=32, help='Batch size for evaluation')
-    parser.add_argument('--n_smis_batch', type=int, default=5, help='Number of SMILES strings per batch')
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
     parser.add_argument('--num_points', type=int, default=10, help='Number of points for evaluation')
     parser.add_argument('--num_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')

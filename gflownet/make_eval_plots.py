@@ -52,6 +52,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
     mols_rand = {}
     
     logZs_hat = []
+    logZs_md = []
 
 
     n_smis = len(smis)
@@ -80,6 +81,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
                                                                                     grad_acc = False)
 
 
+        #TODO store total_perturbs for plotting
         conformers_gen_subset = {smi: item for smi, item in zip(smis_subset, conformers_gen_subset)}
         logrews_gen_all.update({smi: logrew.cpu() for smi, logrew in zip(smis_subset,logrews_gen_subset ) })
         
@@ -95,21 +97,23 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
             
         num_tas.update({smi: len(confs[0].mask_rotate)  for smi, confs in  conformers_rand_subset.items()   })
 
-
+        '''
         logZ = torch.logsumexp(torch.stack(logit_pbs) + torch.stack(logrews_gen_subset) - torch.stack(logit_pfs), dim = 1) - np.log(len(logit_pfs[0])).item() #TODO verifier qu'on rajoute la bonne constante?
         logZ = logZ - np.log(sigma_min).item() + np.log(sigma_max).item()
         print('logZ', logZ) 
         logZs_hat.append(logZ)
         print('logZs_hat', logZs_hat)
+        '''
         
 
     pos_md, logrews_md, mols_md = pickle.load(open("data/pos_md.pkl", 'rb')), pickle.load(open("data/logrews_md.pkl", 'rb')), pickle.load(open("data/mols_md.pkl", 'rb'))
     pos_md = {smi:pos_md[smi] for smi in smis}
     logrews_md = {smi:logrews_md[smi] for smi in smis}
     mols_md = {smi:mols_md[smi] for smi in smis}
+    '''
     #logZs_md = [torch.logsumexp(torch.Tensor(logrews_md[smi]) / len(logrews_md[smi]), dim = 0)  for smi in smis]
-    logZs_md = None
     logZs_hat = torch.stack(logZs_hat)
+    '''
     
     for smi in smis:
         try:
@@ -147,8 +151,8 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
     energy_landscape = []
     datas = []
     logpTs = []
-    if hasattr(data, 'total_perturb') == False:
-        data.total_perturb = torch.zeros( data.mask_rotate.shape[0])
+    
+    data.total_perturb = torch.zeros( data.mask_rotate.shape[0])
     assert torch.abs(data.total_perturb).max() == 0
     for theta0 in torsion_angles_linspace:
         datas.append([])
