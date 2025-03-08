@@ -651,19 +651,20 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         
         if train_mode == 'mle' or train_mode == 'diffusion':
             # Sample on-policy for computing measures
-            samples_smi = [copy.deepcopy(random.choice(gt_data).to(device)) for _ in range(batch_size)]
+            samples_smi = [copy.deepcopy(x).to(device) for _ in range(batch_size) for x in gt_data]
+            #samples_smi = [copy.deepcopy(random.choice(gt_data).to(device)) for _ in range(batch_size)]
             samples_smi = perturb_seeds(samples_smi) 
             traj_on_policy, logit_pf_on_policy, logit_pb_on_policy = sample_forward_trajs(samples_smi, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = 0.0, sample_mode = False)
-            confs_smi, _, _, _, logrew_smi = get_loss(traj_on_policy , logit_pf_on_policy, logit_pb_on_policy, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=False, loss='vargrad', logrew_clamp = logrew_clamp)
+            confs_smi, loss_on_policy, logit_pf_on_policy, logit_pb_on_policy, logrew_smi = get_loss(traj_on_policy , logit_pf_on_policy, logit_pb_on_policy, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=False, loss='vargrad', logrew_clamp = logrew_clamp)
         
-        gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in dataset[i]]
-        gen_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in confs_smi]
-        rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(len(gen_mols))], gen_mols) for i in range(len(gt_mols))]) #n_gen, n_gt
-        rmsd_precision = np.min(rmsds, axis=0)
-        rmsd_recall = np.min(rmsds, axis=1)
-        if use_wandb:
-            wandb.log({f"RMSD precision {smi}": np.mean(rmsd_precision).item()})
-            wandb.log({f"RMSD recall {smi}": np.mean(rmsd_recall).item()})
+            gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in gt_data]
+            gen_mols = np.array([pyg_to_mol(conf.mol, conf, copy=True) for conf in confs_smi]).reshape(batch_size, -1)
+            rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(batch_size)], gen_mols[:,i]) for i in range(len(gt_mols))]) # batch_size, n_gt
+            rmsd_precision = np.min(rmsds, axis=0)
+            rmsd_recall = np.min(rmsds, axis=1)
+            if use_wandb:
+                wandb.log({f"RMSD precision {smi}": np.mean(rmsd_precision).item()})
+                wandb.log({f"RMSD recall {smi}": np.mean(rmsd_recall).item()})
 
         if use_wandb:
             wandb.log({f'logrew mean {smi}': logrew_smi.mean().item()})

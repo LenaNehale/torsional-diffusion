@@ -17,7 +17,7 @@ def parse_train_args():
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
-    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
+    parser.add_argument('--use_wandb', action='store_true', default=False, help='Whether to use wandb')
 
     
     #data arguments      
@@ -26,7 +26,7 @@ def parse_train_args():
     #parser.add_argument('--init_positions_path', type=str, default=None, help='Path to the initial positions of conformers')
     parser.add_argument('--use_synthetic_aug', type=bool, default= True, help='Whether to use synthetic augmentation')
 
-    parser.add_argument('--train_smis', type=str, default=   "CC(=C)c1ccccc1"  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl"  , help='train SMILES strings for which to generate conformers')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
     parser.add_argument('--n_smis_batch', type=int, default=1, help='Number of SMILES strings per batch')

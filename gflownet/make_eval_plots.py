@@ -46,6 +46,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
     pos_gen = {}
     mols_gen = {}
     num_tas = {}
+    tas_all = {}
 
     logrews_rand = {}
     pos_rand = {}
@@ -81,9 +82,10 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
                                                                                     grad_acc = False)
 
 
-        #TODO store total_perturbs for plotting
         conformers_gen_subset = {smi: item for smi, item in zip(smis_subset, conformers_gen_subset)}
         logrews_gen_all.update({smi: logrew.cpu() for smi, logrew in zip(smis_subset,logrews_gen_subset ) })
+
+        tas_all.update({smi: np.stack([conf.total_perturb.cpu().numpy() for conf in confs]) for smi, confs in conformers_gen_subset.items() })
         
         mols_gen.update({smi: [pyg_to_mol(conf.mol, conf, mmff=False, rmsd=False, copy=True) for conf in confs] for smi, confs in conformers_gen_subset.items() })
         pos_gen.update({smi: np.array([conf.pos.cpu().numpy() for conf in confs ]) for smi, confs in conformers_gen_subset.items()})
@@ -127,7 +129,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
     assert len(pos_rand) == len(pos_gen) == len(pos_md)
     assert len(mols_rand) == len(mols_gen) == len(mols_md)
     
-    return {'logrews': [logrews_rand, logrews_gen_all, logrews_md], 'positions': [pos_rand, pos_gen, pos_md], 'mols': [mols_rand, mols_gen, mols_md], 'num_tas': num_tas,   'logZs': [logZs_md, logZs_hat]} 
+    return {'logrews': [logrews_rand, logrews_gen_all, logrews_md], 'positions': [pos_rand, pos_gen, pos_md], 'mols': [mols_rand, mols_gen, mols_md], 'tas': tas_all,   'logZs': [logZs_md, logZs_hat]} 
 
 
 
