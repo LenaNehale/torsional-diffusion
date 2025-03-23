@@ -9,11 +9,14 @@ def p(x, sigma, N=10):
         p_ += np.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2)
     return p_
 
-def p_differentiable(x, sigma, N=10):
+def p_differentiable(x, sigma, N=10, normalize=False):
     p_ = 0
     for i in range(-N, N + 1):
-        p_ += torch.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2)
-    return p_
+        if normalize:
+            p_ += torch.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2) / (sigma * np.sqrt(2 * np.pi) * (2 * N + 1) ) 
+        else:
+            p_ += torch.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2)
+    return p_ 
 
 
 def grad(x, sigma, N=10):
@@ -22,6 +25,13 @@ def grad(x, sigma, N=10):
         p_ += (x + 2 * np.pi * i) / sigma ** 2 * np.exp(-(x + 2 * np.pi * i) ** 2 / 2 / sigma ** 2)
     return p_
 
+'''
+def score(x, sigma, N = 10):
+    score_ = 0
+    for i in range(-N, N + 1):
+        score_ += -  (x + 2 * np.pi * i) / sigma ** 2 
+    return score_
+'''
 
 X_MIN, X_N = 1e-5, 5000  # relative to pi
 SIGMA_MIN, SIGMA_MAX, SIGMA_N = 3e-3, 2, 5000  # relative to pi
@@ -61,7 +71,6 @@ def p(x, sigma):
     sigma = (sigma - np.log(SIGMA_MIN)) / (np.log(SIGMA_MAX) - np.log(SIGMA_MIN)) * SIGMA_N
     sigma = np.round(np.clip(sigma, 0, SIGMA_N)).astype(int)
     return p_[sigma, x]
-
 
 def sample(sigma):
     out = sigma * np.random.randn(*sigma.shape)

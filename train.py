@@ -12,7 +12,8 @@ from utils.utils import get_model, get_optimizer_and_scheduler
 from argparse import Namespace 
 import copy 
 import wandb
-import pickle 
+import pickle
+from gflownet.make_eval_plots import * 
 
 RDLogger.DisableLog('rdApp.*')
 from tqdm import tqdm
@@ -28,7 +29,7 @@ def seed_everything(seed: int):
     import torch
     
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed) 
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -42,6 +43,7 @@ def train(args, model, optimizer):
 
     train_smis, val_smis = np.array(args.train_smis.split()), np.array(args.val_smis.split())
     args.limit_train_mols = len(train_smis)
+    args.n_smis_batch = min(len(train_smis), 5)
     print('Set up replay buffer, seed and Wandb')
     if args.p_replay > 0:
         ReplayBuffer = ReplayBufferClass(smis_dataset = train_smis, max_size = args.replay_buffer_size)
@@ -65,15 +67,17 @@ def train(args, model, optimizer):
             
             if k % 5 == 0: 
                 logpTs = []
-                for smi in train_smis[idx_train]:
-                    subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)[0]
-                    logpT = get_logpT(subset, model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = 16)
+                for smi in train_smis:
+                    subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
+                    logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs)
                     logpTs.append(logpT)
 
                 print('logpTs', logpTs)
                 if args.use_wandb:
                     wandb.log({"logpT batch": torch.stack(logpTs).mean()})
-        
+
+
+                
             if k % 100 == 0:
                 print('Saving the model ...')
                 # Save the current model in a folder model_chkpts
@@ -91,6 +95,14 @@ def train(args, model, optimizer):
                     positions_dict, tas_dict = ReplayBuffer.get_positions_and_tas(train_smis)
                     pickle.dump([positions_dict, tas_dict], open(f'{replaybuffer_path}/{exp_path}.pkl', 'wb'))
                     print('replay buffer positions and tas saved!')
+                
+
+                generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, train_mode = 'gflownet')
+                torch.cuda.empty_cache()
+
+                
+                plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = False, use_wandb = args.use_wandb, path = f"seed_{args.seed}_time_{k}" )
+                
     
         print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     

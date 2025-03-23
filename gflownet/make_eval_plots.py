@@ -10,9 +10,9 @@ from copy import deepcopy
 from utils.torsion import modify_conformer
 import matplotlib.pyplot as plt
 import numpy as np
-
-
-
+import os
+import itertools
+import wandb
 
 
 
@@ -37,15 +37,18 @@ def load_model(exp_path, device):
     return model
 
 
-def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, logrew_clamp, energy_fn, device, sigma_min, sigma_max, init_positions_path = None, n_local_structures = 1, train_mode = 'gflownet'): 
+def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, logrew_clamp, energy_fn, device, sigma_min, sigma_max, init_positions_path = None, n_local_structures = None, max_n_local_structures = None, train_mode = 'gflownet'): 
  
-    
+    assert init_positions_path is not None, 'Please provide a path to the md simulation positions'
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 
-    logrews_gen_all = {}
+    pos_md = {}
+    logrews_md = {}
+    mols_md = {}
+    
+    logrews_gen = {}
     pos_gen = {}
     mols_gen = {}
-    num_tas = {}
     tas_all = {}
 
     logrews_rand = {}
@@ -61,9 +64,13 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
     for i in range(n_smis // n_smis_batch):
         smis_subset = smis[n_smis_batch * i : n_smis_batch * (i + 1) ]
         print('smis subset', smis_subset)
-        confs_rdkit_from_smi = make_dataset_from_smi(smis_subset, init_positions_path = init_positions_path, n_local_structures = n_local_structures)
+        confs_init_smis_subset = make_dataset_from_smi(smis_subset, init_positions_path = init_positions_path, n_local_structures = n_local_structures, max_n_local_structures= max_n_local_structures)
+
+        pos_md.update({smi: np.array([conf.pos.cpu().numpy() for conf in confs ]) for smi, confs in confs_init_smis_subset.items()})
+        logrews_md.update({ smi: get_logrew(Batch.from_data_list(confs), T , energy_fn = energy_fn, clamp = logrew_clamp).cpu() for smi, confs in confs_init_smis_subset.items()})
+        mols_md.update({smi: [pyg_to_mol(conf.mol, conf, mmff=False, rmsd=False, copy=True) for conf in confs] for smi, confs in confs_init_smis_subset.items()})
         train_loss, conformers_gen_subset, logit_pfs, logit_pbs, logrews_gen_subset, perturbs, trajs = gfn_sgd(model, 
-                                                                                    confs_rdkit_from_smi  , 
+                                                                                    confs_init_smis_subset  , 
                                                                                     optimizer, 
                                                                                     device,  
                                                                                     sigma_min = sigma_min, 
@@ -83,10 +90,9 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
 
 
         conformers_gen_subset = {smi: item for smi, item in zip(smis_subset, conformers_gen_subset)}
-        logrews_gen_all.update({smi: logrew.cpu() for smi, logrew in zip(smis_subset,logrews_gen_subset ) })
-
-        tas_all.update({smi: np.stack([conf.total_perturb.cpu().numpy() for conf in confs]) for smi, confs in conformers_gen_subset.items() })
         
+        logrews_gen.update({smi: logrew.cpu() for smi, logrew in zip(smis_subset,logrews_gen_subset ) })
+        tas_all.update({smi: np.stack([conf.total_perturb.cpu().numpy() for conf in confs]) for smi, confs in conformers_gen_subset.items() })
         mols_gen.update({smi: [pyg_to_mol(conf.mol, conf, mmff=False, rmsd=False, copy=True) for conf in confs] for smi, confs in conformers_gen_subset.items() })
         pos_gen.update({smi: np.array([conf.pos.cpu().numpy() for conf in confs ]) for smi, confs in conformers_gen_subset.items()})
 
@@ -96,8 +102,6 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
         pos_rand.update({smi: np.array([conf.pos.cpu().numpy() for conf in confs ]) for smi, confs in  conformers_rand_subset.items() })
         mols_rand.update({smi: [pyg_to_mol(conf.mol, conf, mmff=False, rmsd=False, copy=True) for conf in confs] for smi, confs in conformers_rand_subset.items() })
 
-            
-        num_tas.update({smi: len(confs[0].mask_rotate)  for smi, confs in  conformers_rand_subset.items()   })
 
         '''
         logZ = torch.logsumexp(torch.stack(logit_pbs) + torch.stack(logrews_gen_subset) - torch.stack(logit_pfs), dim = 1) - np.log(len(logit_pfs[0])).item() #TODO verifier qu'on rajoute la bonne constante?
@@ -106,30 +110,17 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
         logZs_hat.append(logZ)
         print('logZs_hat', logZs_hat)
         '''
-        
 
-    pos_md, logrews_md, mols_md = pickle.load(open("data/pos_md.pkl", 'rb')), pickle.load(open("data/logrews_md.pkl", 'rb')), pickle.load(open("data/mols_md.pkl", 'rb'))
-    pos_md = {smi:pos_md[smi] for smi in smis}
-    logrews_md = {smi:logrews_md[smi] for smi in smis}
-    mols_md = {smi:mols_md[smi] for smi in smis}
     '''
     #logZs_md = [torch.logsumexp(torch.Tensor(logrews_md[smi]) / len(logrews_md[smi]), dim = 0)  for smi in smis]
     logZs_hat = torch.stack(logZs_hat)
     '''
-    
-    for smi in smis:
-        try:
-            print('###################')
-            print(f'logrew medians for {smi}: rand {logrews_rand[smi].median()} gen {logrews_gen_all[smi].median()} md {logrews_md[smi].median()} ' )
-            print(f'logrew means for {smi}: rand {logrews_rand[smi].mean()} gen {logrews_gen_all[smi].mean()} md {logrews_md[smi].mean()} ')
-        except:
-            pass
 
-    assert len(logrews_rand) == len(logrews_gen_all) == len(logrews_md)
+    assert len(logrews_rand) == len(logrews_gen) == len(logrews_md)
     assert len(pos_rand) == len(pos_gen) == len(pos_md)
     assert len(mols_rand) == len(mols_gen) == len(mols_md)
     
-    return {'logrews': [logrews_rand, logrews_gen_all, logrews_md], 'positions': [pos_rand, pos_gen, pos_md], 'mols': [mols_rand, mols_gen, mols_md], 'tas': tas_all,   'logZs': [logZs_md, logZs_hat]} 
+    return {'logrews': [logrews_rand, logrews_gen, logrews_md], 'positions': [pos_rand, pos_gen, pos_md], 'mols': [mols_rand, mols_gen, mols_md], 'tas': tas_all,   'logZs': [logZs_md, logZs_hat]} 
 
 
 
@@ -154,8 +145,8 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
     datas = []
     logpTs = []
     
-    data.total_perturb = torch.zeros( data.mask_rotate.shape[0])
-    assert torch.abs(data.total_perturb).max() == 0
+    #data.total_perturb = torch.zeros( data.mask_rotate.shape[0])
+    #assert torch.abs(data.total_perturb).max() == 0
     for theta0 in torsion_angles_linspace:
         datas.append([])
         energy_landscape.append([])
@@ -165,7 +156,7 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
             torsion_update[ix0], torsion_update[ix1] = theta0, theta1
             new_pos = modify_conformer(data0.pos, data0.edge_index.T[data0.edge_mask], data0.mask_rotate, torsion_update, as_numpy=False) #change the value of the 1st torsion angle
             data0.pos = new_pos
-            data0.total_perturb = torch.tensor(torsion_update) % (2 * np.pi)
+            data0.total_perturb = (data.total_perturb + torch.tensor(torsion_update)) % (2 * np.pi)
             #if torch.abs(torch.tensor(torsion_update) % (2 * np.pi) - torch.tensor(torsion_update)).max() > 0 : 
                 #breakpoint()
             datas[-1].append(deepcopy(data0))
@@ -177,7 +168,74 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
     return energy_landscape, logpTs
 
 
+# Visualize the logpTs landscape vs the ground truth energy for a molecule with 2 torsion angles
 
+def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, path ):
+    if plot_pt == False:
+        model = None
+    for smi in smis:
+        data = make_dataset_from_smi([smi], init_positions_path=init_positions_path , n_local_structures = n_local_structures, max_n_local_structures=max_n_local_structures)[smi][0]
+        num_torsion_angles = len(data.mask_rotate)
+        num_tas_combinations = len(list(itertools.combinations(range(num_torsion_angles), 2)))
+        n_columns = int(plot_energy_landscape) + int(plot_sampled_confs) + int(plot_pt) * 2
+        fig, ax = plt.subplots(num_tas_combinations,  n_columns, figsize=(4 * n_columns ,  4 * num_tas_combinations))
+        ax = np.atleast_2d(ax)
+        for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
+            row = ix0 //num_torsion_angles + ix1 - 1
+            energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0 = ix0, ix1 = ix1, energy_fn = energy_fn, ode = False, num_trajs = num_trajs, T = T  , get_pt = plot_pt)
+            energy_landscape = np.array(energy_landscape)
+            energy_landscape[energy_landscape >  2e3] = 2e3
+            
+            #print(ix0, ix1)
+            # Plot energy landscape
+            if plot_energy_landscape:
+                #ax[0].imshow( 100 * np.log(np.array(energy_landscape).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
+                print(ix0 //num_torsion_angles + ix1 - 1, 0)
+                ax[ row, 0].imshow(  - np.array(energy_landscape).transpose() / T, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=  - np.max(energy_landscape) / T, vmax=  - np.min(energy_landscape) / T)
+                ax[ row, 0].set_title('Neg Energy Landscape')
+                ax[ row, 0].set_xlabel(f'Torsion Angle {ix0}')
+                ax[row, 0].set_ylabel(f'Torsion Angle {ix1}')
+                fig.colorbar(ax[row, 0].images[0], ax=ax[row, 0], orientation='vertical')
+            
+            if plot_sampled_confs:
+                ax[row, 1].scatter(generated_stuff['tas'][smi][:,ix0], generated_stuff['tas'][smi][:,ix1], s = .5, c = 'red')
+                ax[row, 1].set_title('GFN samples')
+                ax[row, 1].set_xlabel(f'Torsion Angle {ix0}')
+                ax[row, 1].set_ylabel(f'Torsion Angle {ix1}')
+                '''
+                n_tas = len(data.mask_rotate)
+                gt_tas = 1 + np.pi* np.array([ta for ta in itertools.product([0,1], repeat=n_tas)])
+                ax[1].scatter(np.array(gt_tas)[:,ix0], np.array(gt_tas)[:,ix1], s = 10, c = 'red' )
+                '''
+            
+            if plot_pt:
+            # Plot logpTs
+                ax[row, 2].imshow(np.array(logpTs).transpose(), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(logpTs), vmax=np.max(logpTs))
+                ax[row, 2].set_title('logpTs Landscape')
+                ax[row, 2].set_xlabel(f'Torsion Angle {ix0}')
+                ax[row, 2].set_ylabel(f'Torsion Angle {ix1}')
+                fig.colorbar(ax[row, 2].images[0], ax=ax[row, 2], orientation='vertical')
+
+            # Plot pTs  
+                ax[row, 3].imshow(np.exp(np.array(logpTs).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.exp(np.min(logpTs)), vmax=np.exp(np.max(logpTs)))
+                ax[row, 3].set_title('pTs Landscape')
+                ax[row, 3].set_xlabel(f'Torsion Angle {ix0}')
+                ax[row, 3].set_ylabel(f'Torsion Angle {ix1}')
+                fig.colorbar(ax[row, 3].images[0], ax=ax[row, 3], orientation='vertical')
+            
+                       
+            
+        plt.tight_layout()
+        if path is not None:
+            plt.savefig(f"energy_samples_logpTs_{smi}_{path}.png")
+        plt.show()
+        plt.close(fig)
+        if use_wandb:
+            wandb.log({f"energy_samples_logpTs_{smi}": wandb.Image(plt)})
+        
+        
+
+        
 def get_correlations(confs, model, T, sigma_min, sigma_max,  steps, device, num_trajs, energy_fn, logrew_clamp, exp_path, n_subplots = 5): 
     '''
     Args:
@@ -203,8 +261,11 @@ def get_correlations(confs, model, T, sigma_min, sigma_max,  steps, device, num_
         axes[ smi_idx // n_subplots , smi_idx % n_subplots ].scatter(logpTs[smi], logrews[smi])
         axes[ smi_idx // n_subplots , smi_idx % n_subplots ].set_title(smi)
     fig.suptitle('logpT vs logrews') 
-    plt.tight_layout() 
-    plt.savefig(f"correlations_{exp_path}.png")
+    plt.tight_layout()
+    path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/correlations_plots"
+    if not os.path.exists(f'{path}'):
+        os.makedirs(f'{path}')
+    plt.savefig(f"{path}/{exp_path}.png")
     plt.close(fig)
     return corrs
 
@@ -249,8 +310,11 @@ def make_logrew_histograms(generated_stuff, exp_path, label, range = 2):
     fig.suptitle('logrews distribution') 
     
     fig.legend(['random', 'generated','ground truth'], loc='upper right')
-    plt.tight_layout() 
-    plt.savefig(f"logrewshist_{exp_path}_{label}.png")
+    plt.tight_layout()
+    path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/logrew_hist" 
+    if not os.path.exists(f'{path}'):
+        os.makedirs(f'{path}')
+    plt.savefig(f"{path}/{exp_path}_{label}.png")
     plt.close(fig)
 
 
@@ -301,55 +365,11 @@ def make_localstructures_histograms(generated_stuff, exp_path, label):
         axs[i, 2].legend()
     
     plt.tight_layout()
-    plt.savefig(f"localstructures_{exp_path}_{label}.png")
+    path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/localstructures_hist"
+    if not os.path.exists(f'{path}'):
+        os.makedirs(f'{path}')
+    plt.savefig(f"{path}/{exp_path}_{label}.png")
     plt.close(fig)
 
 
 
-
-
-'''
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('--smis_train', type=str, default='CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O', help='train SMILES')
-parser.add_argument('--smis_test', type=str, default='CC(C)CC1NC(=S)N(Cc2ccccc2)C1=O', help='test SMILES')
-parser.add_argument('--p_expl', type=float, default=0.2, help='p_expl')
-parser.add_argument('--p_replay', type=float, default=0.2, help='p_replay')
-parser.add_argument('--batch_size', type=int, default=1024, help='batch_size')
-parser.add_argument('--diffusion_steps', type=int, default=20, help='diffusion_steps')
-args = parser.parse_args()
-if __name__ == '__main__':
-
-    # load params
-    ## general model params
-    device = torch.device('cuda')
-    sigma_min = 0.01 * np.pi
-    sigma_max = np.pi
-    ## energy params
-    energy_fn = 'mmff'
-    seed = 0
-    k_b = 0.001987204118 
-    room_temp = 298.15
-    T = k_b * room_temp
-    logrew_clamp = -1e5
-
-    
-    
-    exp_path = f"gflownet_{args.energy_fn}_{args.seed}_limit_train_mols_{len(args.smis_train)}_dataset_freesolv_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}"
-    if len(args.smis_train) == 1 : 
-        exp_path += f"_smi_{args.smis[0]}"
-    model = load_model(exp_path)
-    # generate stuff on the train data and test data
-    for smis, label in zip([args.smis_train, args.smis_test], ['train', 'test']):
-        generated_stuff = generate_stuff(model, smis, args.n_smis_batch, args.batch_size, args.diffusion_steps, args.T, args.logrew_clamp, args.energy_fn)
-
-        logrews_rand, logrews_gen, logrews_md = generated_stuff['logrews']
-        pos_rand, pos_gen, pos_md = generated_stuff['positions']
-        mols_rand, mols_gen, mols_md = generated_stuff['mols']
-        num_tas = generated_stuff['num_tas']
-
-        make_logrew_histograms(logrews_rand, logrews_gen, logrews_md, exp_path, label)
-        make_localstructures_hist(mols_rand, mols_gen, mols_md, exp_path, label)
-        
-    
-'''  

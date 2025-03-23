@@ -222,9 +222,10 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
     - logp: log-likelihood of conformers under the model
     '''
 
+    sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)    
+    eps = 1 / steps
+    
     if ode: 
-        sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)
-        eps = 1 / steps
         data = copy.deepcopy(Batch.from_data_list(conformers))
         bs, n_torsion_angles = len(data), data.mask_rotate[0].shape[0]
         logp = torch.zeros(bs)
@@ -258,8 +259,12 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
         conformers = [ x for x in conformers for _ in range(num_trajs)]
         traj = sample_backward_trajs(conformers, sigma_min, sigma_max,  steps)
         logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
-        logit_pf, logit_pb = logit_pf.reshape( -1, num_trajs), logit_pb.reshape( -1, num_trajs)      
-        logp = torch.logsumexp(logit_pf - logit_pb, dim = -1)
+        logit_pf, logit_pb = logit_pf.reshape( -1, num_trajs), logit_pb.reshape( -1, num_trajs)
+        g_0 = sigma_schedule[0] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+        g_T = sigma_schedule[-1] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))  
+        log_normalisation_cst = torch.log( g_0 / g_T)
+        #print('log_normalisation_cst', log_normalisation_cst, 'logit pf', logit_pf, 'logit pb', logit_pb)
+        logp = torch.logsumexp(logit_pf - logit_pb - log_normalisation_cst , dim = -1)
         #Empty Cuda memory
         del logit_pf, logit_pb
         torch.cuda.empty_cache()
@@ -526,7 +531,7 @@ def get_rmsds(mols0, mols1):
         rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
     return rmsds
 
-def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False, use_synthetic_aug = True):
+def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False, use_synthetic_aug = True):
     if train:
         model.train() # set model to training mode
     else:
@@ -541,12 +546,10 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
     logrews = []
     total_perturbs = []
     trajs = []
-    rmsds_precision = []
-    rmsds_recall = []
     optimizer.zero_grad()
-    for i in range(len(dataset)):
-        smi  = dataset[i][0].canonical_smi 
-        gt_data = dataset[i] # gt_data contains conformers with different local structures for each smi
+    
+    dataset = list(dataset_dict.values())
+    for smi, gt_data in dataset_dict.items():
         if train_mode in ['diffusion', 'mle']:
             if use_synthetic_aug:
                 synthetic_data = [make_synthetic_data(x) for x in gt_data]
@@ -560,6 +563,7 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             logit_pf_smi = []
             logit_pb_smi = []
             logrew_smi = []
+            logZ_smi = []
             for samples in samples_smi:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
             
@@ -590,6 +594,10 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
                                 param.grad += g / len(dataset)
                 else:
                     confs, loss, logit_pf, logit_pb, logrew = get_loss(traj_concat , logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
+                    logZ = (logit_pb + logrew/T - logit_pf).detach()
+                    logZ = reduce(logZ, "bs -> ", "mean")
+                
+                logZ_smi.append(logZ)
             
                 if ReplayBuffer is not None:
                     ReplayBuffer.update(samples[0].canonical_smi, samples[0].local_structure_id, confs[:batch_size], logrew[:batch_size]) # discard the elements that were already present in the replay buffer
@@ -603,11 +611,20 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             loss_smi = torch.stack(loss_smi).mean()
             logrew_smi = torch.cat(logrew_smi)
             confs_smi = [x for sublist in confs_smi for x in sublist]
+            logZ_smi = torch.logsumexp(torch.stack(logZ_smi), dim = 0) - np.log((len(logZ_smi)))
+            # add normalisation constant
+            sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)    
+            g_0 = sigma_schedule[0] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+            g_T = sigma_schedule[-1] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))  
+            log_normalisation_cst = - torch.log( g_0 / g_T)
+            logZ_smi_normalised = logZ_smi - log_normalisation_cst
+            if use_wandb:
+                wandb.log({f'logZ_{smi}': logZ_smi_normalised.item()})
             
             
             if ReplayBuffer is not None and use_wandb:
                 rb_logrew_mean_smi = ReplayBuffer.get_logrews(smi).mean()
-                wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi })
+                wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi })   
         
         
         elif train_mode =='diffusion':
@@ -633,16 +650,11 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             loss_kl = - logit_pf_smi.mean()
             #loss_consistency = torch.pow(logit_pf.detach() - logit_pb - logit_pf_bis + logit_pb_bis, 2).mean()
             loss_consistency = 0.0
-            print('KL loss', loss_kl, 'consistency loss', loss_consistency)
+            #print('KL loss', loss_kl, 'consistency loss', loss_consistency)
             #if use_wandb:
                     #wandb.log({'KL loss': loss_kl.item()})
                     #wandb.log({'consistency loss': loss_consistency.item()})
             loss_smi = loss_kl + 0.0 *loss_consistency
-
-
-            
-            #confs = gt_data
-            #logrew = get_logrew(gt_data, T , energy_fn , clamp = logrew_clamp)
 
         else:
             raise NotImplementedError(f"Training mode {train_mode} not implemented!")
@@ -650,37 +662,41 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
         
         
         if train_mode == 'mle' or train_mode == 'diffusion':
+            bs = 8
             # Sample on-policy for computing measures
-            samples_smi = [copy.deepcopy(x).to(device) for _ in range(batch_size) for x in gt_data]
-            #samples_smi = [copy.deepcopy(random.choice(gt_data).to(device)) for _ in range(batch_size)]
+            samples_smi = [copy.deepcopy(x).to(device) for _ in range(bs) for x in gt_data]
             samples_smi = perturb_seeds(samples_smi) 
             traj_on_policy, logit_pf_on_policy, logit_pb_on_policy = sample_forward_trajs(samples_smi, model, train = False, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = 0.0, sample_mode = False)
             confs_smi, loss_on_policy, logit_pf_on_policy, logit_pb_on_policy, logrew_smi = get_loss(traj_on_policy , logit_pf_on_policy, logit_pb_on_policy, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=False, loss='vargrad', logrew_clamp = logrew_clamp)
         
             gt_mols = [pyg_to_mol(conf.mol, conf, copy=True) for conf in gt_data]
-            gen_mols = np.array([pyg_to_mol(conf.mol, conf, copy=True) for conf in confs_smi]).reshape(batch_size, -1)
-            rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(batch_size)], gen_mols[:,i]) for i in range(len(gt_mols))]) # batch_size, n_gt
-            rmsd_precision = np.min(rmsds, axis=0)
-            rmsd_recall = np.min(rmsds, axis=1)
+            gen_mols = np.array([pyg_to_mol(conf.mol, conf, copy=True) for conf in confs_smi]).reshape(bs, -1)
+            rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(bs)], gen_mols[:,i]) for i in range(len(gt_mols))]) # n_gt, bs
             if use_wandb:
-                wandb.log({f"RMSD precision {smi}": np.mean(rmsd_precision).item()})
-                wandb.log({f"RMSD recall {smi}": np.mean(rmsd_recall).item()})
+                wandb.log({f"RMSD avg {smi}": np.mean(rmsds).item()})
+                wandb.log({f"RMSD min {smi}":  np.min(rmsds, axis = 1).mean().item()})
+            
+            logZ_smi = (logit_pb_on_policy + logrew_smi/T - logit_pf_on_policy).detach()
+            logZ_smi = reduce(logZ_smi, "bs -> ", "mean")
+            # add normalisation constant
+            sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)    
+            g_0 = sigma_schedule[0] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
+            g_T = sigma_schedule[-1] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))  
+            log_normalisation_cst = - torch.log( g_0 / g_T)
+            logZ_smi_normalised = logZ_smi - log_normalisation_cst
+            if use_wandb:
+                wandb.log({f'logZ_{smi}': logZ_smi_normalised.item()})
+
 
         if use_wandb:
             wandb.log({f'logrew mean {smi}': logrew_smi.mean().item()})
+            wandb.log({f'loss {smi}': loss_smi.item()})
 
         loss_tot.append( loss_smi / len(dataset))
         conformers.append(confs_smi)
         logit_pfs.append(logit_pf_smi if logit_pf_smi is not None else None)
         logit_pbs.append(logit_pb_smi)
         logrews.append(logrew_smi)
-        rmsds_precision.append(rmsd_precision)
-        rmsds_recall.append(rmsd_recall)
-        
-        #if train_mode == 'gflownet' :
-            #total_perturbs.append(traj[-1].total_perturb) #TODO reecrire for different local structures
-        
-        #trajs.append(traj) #TODO reverifier
         
    
     
@@ -697,12 +713,12 @@ def gfn_sgd(model, dataset, optimizer, device,  sigma_min, sigma_max, steps, tra
             wandb.log({loss_type: torch.stack(loss_tot).mean().item()})
 
             wandb.log({f'logrew batch': torch.cat(logrews).mean().item()})
-            wandb.log({f'rmsds precision batch': np.mean(rmsds_precision).item()})
-            wandb.log({f'rmsds recall batch': np.mean(rmsds_recall).item()})
+            #wandb.log({f'rmsds precision batch': np.mean(rmsds_precision).item()})
+            #wandb.log({f'rmsds recall batch': np.mean(rmsds_recall).item()})
     
     
 
-            
+    #TODO return dictionaries, per-smile and per-local-structure      
     return torch.stack(loss_tot), conformers, logit_pfs, logit_pbs, logrews, total_perturbs, trajs
 
         

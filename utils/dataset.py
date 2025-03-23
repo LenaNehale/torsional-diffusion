@@ -196,7 +196,7 @@ class ConformerDataset(Dataset):
         self.root = root
         self.types = types
         self.failures = defaultdict(int)
-        self.dataset = dataset
+        self.dataset = dataset 
         self.boltzmann_resampler = boltzmann_resampler
 
         if cache: cache = str(cache) + "." + mode
@@ -428,7 +428,7 @@ def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func
     Returns:
         conformers: list of sublists of conformers for each smile. Each sublist contains n_local_structures conformers, i.e. with different initial bond lengths/angles.
     '''
-    conformers = []
+    conformers = {}
     for smi in smiles:
         mol, data = get_seed(smi)
         if mol is None or data is None :
@@ -441,12 +441,12 @@ def make_dataset_from_smi(smiles, optimize_mmff = False, embed_func = embed_func
                 with open(init_positions_path, 'rb') as f:
                     init_positions = pickle.load(f)
                 positions = init_positions[ smi] * 10  # nanometers to angstroms
-                pos_ix = np.random.randint(0, min(len(positions), max_n_local_structures) , size = n_local_structures) # sample one position from dataset
+                pos_ix = np.random.randint(0, min(len(positions), max_n_local_structures) , size = n_local_structures) # sample positions from dataset
                 for i, conf in enumerate(confs):
                     conf.pos = torch.Tensor(positions[pos_ix[i]]) 
                     conf.total_perturb = torch.zeros(conf.mask_rotate.shape[0])
                     conf.local_structure_id = pos_ix[i]
-            conformers += [confs]
+            conformers[smi] = confs
 
     return conformers
 

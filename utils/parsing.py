@@ -17,16 +17,16 @@ def parse_train_args():
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
-    parser.add_argument('--use_wandb', action='store_true', default=False, help='Whether to use wandb')
+    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
 
     
     #data arguments      
     parser.add_argument('--data_dir', type=str, default= SCRATCH / 'torsional-diffusion/DRUGS/drugs/', help='Folder containing original conformers')
     parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
-    #parser.add_argument('--init_positions_path', type=str, default=None, help='Path to the initial positions of conformers')
-    parser.add_argument('--use_synthetic_aug', type=bool, default= True, help='Whether to use synthetic augmentation')
+    parser.add_argument('--use_synthetic_aug', type=bool, default= False, help='Whether to use synthetic augmentation')
 
-    parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl"  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N"  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--limit_train_mols', type=int, default=80, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
     parser.add_argument('--n_smis_batch', type=int, default=1, help='Number of SMILES strings per batch')
@@ -37,7 +37,7 @@ def parse_train_args():
     
     
     #gflownet arguments
-    parser.add_argument('--train_mode', type=str, default='mle', help='Training mode for GflowNets')
+    parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
     parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
     parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
@@ -46,24 +46,25 @@ def parse_train_args():
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
     parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
-    parser.add_argument('--batch_size_eval', type=int, default=32, help='Batch size for evaluation')
-    parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
-    parser.add_argument('--num_points', type=int, default=10, help='Number of points for evaluation')
-    parser.add_argument('--num_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')
+    parser.add_argument('--sigma_min', type=float, default=0.01*3.14, help='Minimum sigma used for training')
+    parser.add_argument('--sigma_max', type=float, default=3.14, help='Maximum sigma used for training')
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
+
+    # eval args
+    parser.add_argument('--batch_size_eval', type=int, default=1024, help='Batch size for evaluation')
+    parser.add_argument('--num_points', type=int, default=30, help='Number of points for evaluation')
+    parser.add_argument('--num_back_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')
     
 
 
     # other training arguments
+    parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
     parser.add_argument('--n_epochs', type=int, default=250, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')
     parser.add_argument('--optimizer', type=str, default='adam', help='Adam optimiser only one supported')
     parser.add_argument('--scheduler', type=str, default='plateau', help='LR scehduler: plateau or none')
     parser.add_argument('--scheduler_patience', type=int, default=20, help='Patience of plateau scheduler')
-    parser.add_argument('--sigma_min', type=float, default=0.01*3.14, help='Minimum sigma used for training')
-    parser.add_argument('--sigma_max', type=float, default=3.14, help='Maximum sigma used for training')
-    parser.add_argument('--limit_train_mols', type=int, default=80, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--boltzmann_weight', action='store_true', default=True, help='Whether to sample conformers based on B.w.')
 
     # Feature arguments
