@@ -39,10 +39,10 @@ def parse_train_args():
     #gflownet arguments
     parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
-    parser.add_argument('--p_expl', type=float, default=0.0, help='Exploration probability for GflowNets')
+    parser.add_argument('--p_expl', type=float, default=0.2, help='Exploration probability for GflowNets')
     parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
-    parser.add_argument('--logrew_clamp', type=float, default=-1e3, help='Clamping value for log rewards')
+    parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
     parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
@@ -54,12 +54,12 @@ def parse_train_args():
     parser.add_argument('--batch_size_eval', type=int, default=1024, help='Batch size for evaluation')
     parser.add_argument('--num_points', type=int, default=30, help='Number of points for evaluation')
     parser.add_argument('--num_back_trajs', type=int, default=8, help='Number of backward trajectories for computing logpT')
-    
+    parser.add_argument('--ode', type=bool, default=False, help='Whether to use ODE for computing logpT')
 
 
     # other training arguments
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
-    parser.add_argument('--n_epochs', type=int, default=250, help='Number of epochs for training')
+    parser.add_argument('--n_epochs', type=int, default=1, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')
     parser.add_argument('--optimizer', type=str, default='adam', help='Adam optimiser only one supported')

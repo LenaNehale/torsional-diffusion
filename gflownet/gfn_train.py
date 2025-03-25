@@ -68,10 +68,10 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         z = torch.normal(mean=0, std=1, size=data.edge_pred.shape) 
         score = data.edge_pred.to(device)        
         if random.random() < p_expl:
-            noise_scale = 5 # Set to a higher value for more noise (hence more exploration)
+            #perturb = 2 * np.pi * torch.rand_like(score, device=device) (gives me Nans :( )
+            perturb = 1 * (g * np.sqrt(eps) * z).to(device)
         else:
-            noise_scale = 1
-        perturb = g**2 * eps * score + (noise_scale * g * np.sqrt(eps) * z).to(device)
+            perturb = g**2 * eps * score + (g * np.sqrt(eps) * z).to(device)
         # Get PF and PB
         if not sample_mode:
             mean, std = g**2 * eps * score, g * np.sqrt(eps)

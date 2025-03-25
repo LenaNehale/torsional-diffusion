@@ -124,9 +124,9 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
 
 
 
-def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs, T, get_pt = True):
+def get_logrew_heatmap(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0, ix1, energy_fn, ode, num_trajs, T, logrew_clamp, get_pt = True):
     '''
-    Get 2Denergy heatmap and logpT heatmap. Both are obtained by computing the energy for different values (linspace) of the 2 torsion angles ix0 and ix1, while fixing the other torsion angles.
+    Get 2D gt and learned logrews. Both are obtained by computing the energy for different values (linspace) of the 2 torsion angles ix0 and ix1, while fixing the other torsion angles.
     Args:
     - data: pytorch geometric data object representing a conformer
     - model: score model
@@ -137,11 +137,11 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
     - ix0, ix1: indices of the torsion angles to vary
     - energy_fn: energy function to use (mmff or dummy)
     Returns:
-    - energy_landscape: 2D array of energy values
+    - logrew_landscape: 2D array of logreward values
     - logpTs: 2D array of logpT values
     '''
     torsion_angles_linspace = torch.linspace(0, 2*np.pi, num_points)
-    energy_landscape = []
+    logrew_landscape = []
     datas = []
     logpTs = []
     
@@ -149,7 +149,7 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
     #assert torch.abs(data.total_perturb).max() == 0
     for theta0 in torsion_angles_linspace:
         datas.append([])
-        energy_landscape.append([])
+        logrew_landscape.append([])
         for theta1 in torsion_angles_linspace:
             data0 = deepcopy(data)
             torsion_update = np.zeros(len(data0.mask_rotate))
@@ -160,17 +160,17 @@ def get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device
             #if torch.abs(torch.tensor(torsion_update) % (2 * np.pi) - torch.tensor(torsion_update)).max() > 0 : 
                 #breakpoint()
             datas[-1].append(deepcopy(data0))
-            energy_landscape[-1].append( - get_logrew(data0, energy_fn = energy_fn, T = T).item())
+            logrew_landscape[-1].append(get_logrew(data0, energy_fn = energy_fn, T = T, clamp = logrew_clamp).item())
         if get_pt:
             logpT = get_logpT(datas[-1], model.to(device), sigma_min, sigma_max,  steps, device, ode, num_trajs)
             logpT = logpT.tolist()
             logpTs.append(logpT)
-    return energy_landscape, logpTs
+    return np.array(logrew_landscape), np.array(logpTs)
 
 
 # Visualize the logpTs landscape vs the ground truth energy for a molecule with 2 torsion angles
 
-def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, path ):
+def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_clamp, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, exp_path, timestep, ode = False):
     if plot_pt == False:
         model = None
     for smi in smis:
@@ -182,17 +182,30 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, init_pos
         ax = np.atleast_2d(ax)
         for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
             row = ix0 //num_torsion_angles + ix1 - 1
-            energy_landscape, logpTs = get_2dheatmap_array_and_pt(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0 = ix0, ix1 = ix1, energy_fn = energy_fn, ode = False, num_trajs = num_trajs, T = T  , get_pt = plot_pt)
-            energy_landscape = np.array(energy_landscape)
-            energy_landscape[energy_landscape >  2e3] = 2e3
+            logrew_landscape, logpTs = get_logrew_heatmap(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0 = ix0, ix1 = ix1, energy_fn = energy_fn, ode = ode, num_trajs = num_trajs, T = T  , logrew_clamp = logrew_clamp, get_pt = plot_pt)
+            if use_wandb:
+                # log correlation between logpT and logrew
+                corr = np.corrcoef(logpTs.flatten(), logrew_landscape.flatten())[0, 1]
+                wandb.log({f"corr_{smi}_{ix0}_{ix1}": corr})
+                # Log KL divergence between logpT and logrew
+                logrew_normalized = logrew_landscape - np.log(np.exp(logrew_landscape).sum())
+                logpTs_normalized = logpTs - np.log(np.exp(logpTs).sum())
+                reverse_kl =  logrew_normalized * (logrew_normalized - logpTs_normalized)
+                reverse_kl = reverse_kl.sum()
+                forward_kl = logpTs_normalized * (logpTs_normalized - logrew_normalized)
+                forward_kl = forward_kl.sum()   
+                #jsd = 1 / 2 *  (reverse_kl + forward_kl)
+                wandb.log({f"reverse_kl_{smi}_{ix0}_{ix1}": reverse_kl })
+                wandb.log({f"forward_kl_{smi}_{ix0}_{ix1}": forward_kl })
+
             
             #print(ix0, ix1)
             # Plot energy landscape
             if plot_energy_landscape:
                 #ax[0].imshow( 100 * np.log(np.array(energy_landscape).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
                 print(ix0 //num_torsion_angles + ix1 - 1, 0)
-                ax[ row, 0].imshow(  - np.array(energy_landscape).transpose() / T, extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=  - np.max(energy_landscape) / T, vmax=  - np.min(energy_landscape) / T)
-                ax[ row, 0].set_title('Neg Energy Landscape')
+                ax[ row, 0].imshow(  logrew_landscape.transpose() , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=   np.min(logrew_landscape), vmax=  np.min(logrew_landscape))
+                ax[ row, 0].set_title('Logrew Landscape')
                 ax[ row, 0].set_xlabel(f'Torsion Angle {ix0}')
                 ax[row, 0].set_ylabel(f'Torsion Angle {ix1}')
                 fig.colorbar(ax[row, 0].images[0], ax=ax[row, 0], orientation='vertical')
@@ -226,12 +239,14 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, init_pos
                        
             
         plt.tight_layout()
-        if path is not None:
-            plt.savefig(f"energy_samples_logpTs_{smi}_{path}.png")
+        if exp_path is not None:
+            if not os.path.exists(f'/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples'):
+                os.makedirs(f'/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples')
+            plt.savefig(f"/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples/{exp_path}_{smi}_{timestep}.png")
         plt.show()
         plt.close(fig)
-        if use_wandb:
-            wandb.log({f"energy_samples_logpTs_{smi}": wandb.Image(plt)})
+        #if use_wandb:
+            #wandb.log({f"energy_samples_logpTs_{smi}": wandb.Image(plt)})
         
         
 
