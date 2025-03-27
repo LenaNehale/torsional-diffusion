@@ -70,7 +70,7 @@ def train(args, model, optimizer):
                 if args.use_wandb:
                     wandb.log({"logpT batch": torch.stack(logpTs).mean()})
 
-            if k % 100 == 0:
+            if k % 20 == 0:
                 print('Saving the model ...')
                 # Save the current model in a folder model_chkpts
                 model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"

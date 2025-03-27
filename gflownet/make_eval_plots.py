@@ -190,9 +190,9 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_c
                 # Log KL divergence between logpT and logrew
                 logrew_normalized = logrew_landscape - np.log(np.exp(logrew_landscape).sum())
                 logpTs_normalized = logpTs - np.log(np.exp(logpTs).sum())
-                reverse_kl =  logrew_normalized * (logrew_normalized - logpTs_normalized)
+                reverse_kl =  np.exp(logrew_normalized) * (logrew_normalized - logpTs_normalized)
                 reverse_kl = reverse_kl.sum()
-                forward_kl = logpTs_normalized * (logpTs_normalized - logrew_normalized)
+                forward_kl = np.exp(logpTs_normalized) * (logpTs_normalized - logrew_normalized)
                 forward_kl = forward_kl.sum()   
                 #jsd = 1 / 2 *  (reverse_kl + forward_kl)
                 wandb.log({f"reverse_kl_{smi}_{ix0}_{ix1}": reverse_kl })
@@ -204,7 +204,7 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_c
             if plot_energy_landscape:
                 #ax[0].imshow( 100 * np.log(np.array(energy_landscape).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
                 print(ix0 //num_torsion_angles + ix1 - 1, 0)
-                ax[ row, 0].imshow(  logrew_landscape.transpose() , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=   np.min(logrew_landscape), vmax=  np.min(logrew_landscape))
+                ax[ row, 0].imshow(  logrew_landscape.transpose() , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=   np.min(logrew_landscape), vmax=  np.max(logrew_landscape))
                 ax[ row, 0].set_title('Logrew Landscape')
                 ax[ row, 0].set_xlabel(f'Torsion Angle {ix0}')
                 ax[row, 0].set_ylabel(f'Torsion Angle {ix1}')
