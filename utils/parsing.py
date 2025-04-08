@@ -26,12 +26,12 @@ def parse_train_args():
     parser.add_argument('--use_synthetic_aug', type=bool, default= False, help='Whether to use synthetic augmentation')
 
     parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N"  , help='train SMILES strings for which to generate conformers')
-    parser.add_argument('--limit_train_mols', type=int, default=80, help='Limit to the number of molecules in dataset, 0 uses them all')
+    parser.add_argument('--limit_train_mols', type=int, default=None, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
-    parser.add_argument('--n_smis_batch', type=int, default=1, help='Number of SMILES strings per batch')
+    parser.add_argument('--n_smis_batch', type=int, default=None, help='Number of SMILES strings per batch')
     parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  #TODO change!
-    parser.add_argument('--max_n_local_structures', type=int, default=1, help= 'Max Number of local structures per smile to sample from')  #TODO  set to +inf for mle/diffusion!
+    parser.add_argument('--max_n_local_structures', type=int, default=1, help= 'Max Number of local structures per smile to sample from')  #set to +inf for mle/diffusion!
     parser.add_argument('--gt_data_path', type=str, default=None, help='Path to the ground truth data')
     
     
@@ -45,7 +45,7 @@ def parse_train_args():
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')
     parser.add_argument('--replay_buffer_size', type=int, default=500, help='Size of the replay buffer')
-    parser.add_argument('--batch_size_train', type=int, default=16, help='Batch size for training')
+    parser.add_argument('--batch_size_train', type=int, default=32, help='Batch size for training')
     parser.add_argument('--sigma_min', type=float, default=0.01*3.14, help='Minimum sigma used for training')
     parser.add_argument('--sigma_max', type=float, default=3.14, help='Maximum sigma used for training')
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
@@ -59,7 +59,7 @@ def parse_train_args():
 
     # other training arguments
     parser.add_argument('--num_sgd_steps', type=int, default=2048, help='Number of SGD steps for one epoch')
-    parser.add_argument('--n_epochs', type=int, default=1, help='Number of epochs for training')
+    parser.add_argument('--n_epochs', type=int, default=50, help='Number of epochs for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')
     parser.add_argument('--optimizer', type=str, default='adam', help='Adam optimiser only one supported')

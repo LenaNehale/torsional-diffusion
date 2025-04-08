@@ -12,9 +12,28 @@ do
         done
     done     
 done
+
+
+for train_mode in gflownet
+do
+    for max_n_local_structures in 1 10 100
+    do
+        sbatch train.sh  --train_mode $train_mode --max_n_local_structures $max_n_local_structures
+    done
+done
+
 '''
 
-for train_mode in diffusion mle 
+for seed in 0 102 45 76 98
 do
-    sbatch train.sh  --train_mode $train_mode
+    for p_expl in 0.2 
+    do
+        for lr in 1e-2 5e-3 1e-3 1e-4
+        do
+            for train_smis in "COC=O" "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl" "c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N"  
+            do
+                sbatch train.sh --seed $seed --p_expl $p_expl  --lr $lr --train_smis $train_smis
+            done
+        done
+    done
 done

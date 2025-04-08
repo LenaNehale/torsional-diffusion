@@ -69,7 +69,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
         score = data.edge_pred.to(device)        
         if random.random() < p_expl:
             #perturb = 2 * np.pi * torch.rand_like(score, device=device) (gives me Nans :( )
-            perturb = 1 * (g * np.sqrt(eps) * z).to(device)
+            perturb = g**2 * eps * score + 5 * (g * np.sqrt(eps) * z).to(device)
         else:
             perturb = g**2 * eps * score + (g * np.sqrt(eps) * z).to(device)
         # Get PF and PB
@@ -481,7 +481,7 @@ def get_loss_diffusion(model, gt_data , sigma_min, sigma_max, device, train, use
     - device (torch.device): CUDA or CPU device.
     - train (bool): Whether the model is in training mode.
     - use_wandb (bool): Whether to log to wandb.
-    Returns:
+    Returns: 
     - loss (torch.Tensor): Diffusion loss.
     '''
     assert all( gt_data[i].canonical_smi ==  gt_data[0].canonical_smi for i in range(len(gt_data)))

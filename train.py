@@ -50,12 +50,15 @@ def train(args, model, optimizer):
     else:
         ReplayBuffer = None
     seed_everything(args.seed)
-    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}_use_synthetic_aug_{args.use_synthetic_aug}"
+    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}_use_synthetic_aug_{args.use_synthetic_aug}_lr_{args.lr}"
     if args.limit_train_mols == 1 : 
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
         wandb.login()
-        run = wandb.init(project="gfn_torsional_diff")
+        group = f"limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_lr_{args.lr}"
+        if args.limit_train_mols == 1 : 
+            group += f"_smi_{args.train_smis}" 
+        run = wandb.init(project="gfn_torsional_diff", group = group )
         run.name = exp_path
     
     print("Starting GFN training ...")
