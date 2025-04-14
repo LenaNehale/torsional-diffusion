@@ -40,7 +40,7 @@ def parse_train_args():
     parser.add_argument('--train_mode', type=str, default='gflownet', help='Training mode for GflowNets')
     parser.add_argument('--grad_acc', type=bool, default=True, help='Whether or not to use gradient accumulation')
     parser.add_argument('--p_expl', type=float, default=0.2, help='Exploration probability for GflowNets')
-    parser.add_argument('--p_replay', type=float, default=0.0, help='Replay probability for GflowNets')
+    parser.add_argument('--p_replay', type=float, default=0.2, help='Replay probability for GflowNets')
     parser.add_argument('--energy_fn', type=str, default='mmff', help='Energy function for GflowNets')
     parser.add_argument('--logrew_clamp', type=float, default=-1e5, help='Clamping value for log rewards')
     parser.add_argument('--rew_temp', type=float, default= 0.001987204118 * 298.15 , help='Temperature for rewards')

@@ -556,7 +556,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                 synthetic_data = [x for l in synthetic_data for x in l]
                 gt_data = gt_data + synthetic_data
         if train_mode == 'gflownet':
-            samples_smi = [[copy.deepcopy(x) for _ in range(batch_size) ]  for x in gt_data] # shape: len(gt_data) x batch_size
+            samples_smi = [[copy.deepcopy(x) for _ in range(int(batch_size * (1 - p_replay))) ]  for x in gt_data] # shape: len(gt_data) x batch_size
             samples_smi = [perturb_seeds(x) for x in samples_smi] # apply uniform noise to torsion angles
             loss_smi = []
             confs_smi = []
@@ -567,14 +567,14 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             for samples in samples_smi:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
             
-                if train and ReplayBuffer is not None:
+                if train and ReplayBuffer is not None and ReplayBuffer.get_len(samples[0].canonical_smi,samples[0].local_structure_id ) > int(batch_size*p_replay) :
                     final_states_replay, _ = ReplayBuffer.sample( samples[0].canonical_smi, samples[0].local_structure_id,  int(batch_size*p_replay))
                     traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps)
                     logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
                 
-                if ReplayBuffer is not None and len(final_states_replay) > 0:    
+                if ReplayBuffer is not None and ReplayBuffer.get_len(samples[0].canonical_smi,samples[0].local_structure_id ) > int(batch_size*p_replay) and len(final_states_replay) > 0:    
                     traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
                 else:
                     traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
@@ -601,7 +601,6 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             
                 if ReplayBuffer is not None:
                     ReplayBuffer.update(samples[0].canonical_smi, samples[0].local_structure_id, confs[:batch_size], logrew[:batch_size]) # discard the elements that were already present in the replay buffer
-                
                 loss_smi.append(loss)
                 confs_smi.append(confs)
                 logit_pf_smi.append(logit_pf.detach())
@@ -613,7 +612,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             confs_smi = [x for sublist in confs_smi for x in sublist]
             logZ_smi = torch.logsumexp(torch.stack(logZ_smi), dim = 0) - np.log((len(logZ_smi)))
             # add normalisation constant
-            sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)    
+            sigma_schedule = 10 ** np.linspace( np.log10(sigma_max), np.log10(sigma_min), steps + 1)  # sigma(t) = sigma_min^t.sigma_max^(1-t)  
             g_0 = sigma_schedule[0] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
             g_T = sigma_schedule[-1] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))  
             log_normalisation_cst = - torch.log( g_0 / g_T)
@@ -623,7 +622,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             
             
             if ReplayBuffer is not None and use_wandb:
-                rb_logrew_mean_smi = ReplayBuffer.get_logrews(smi).mean()
+                rb_logrew_mean_smi = ReplayBuffer.get_logrews(smi, samples[0].local_structure_id ).mean()
                 wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi })   
         
         
