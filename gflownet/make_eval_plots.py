@@ -170,14 +170,14 @@ def get_logrew_heatmap(data, model, sigma_min, sigma_max,  steps, device, num_po
 
 # Visualize the logpTs landscape vs the ground truth energy for a molecule with 2 torsion angles
 
-def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_clamp, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, exp_path, timestep, ode = False):
+def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_clamp, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, exp_path, timestep, ode = False, replay_tas = None):
     if plot_pt == False:
         model = None
     for smi in smis:
-        data = make_dataset_from_smi([smi], init_positions_path=init_positions_path , n_local_structures = n_local_structures, max_n_local_structures=max_n_local_structures)[smi][0]
+        data = make_dataset_from_smi([smi], init_positions_path=init_positions_path , n_local_structures = 1, max_n_local_structures=1)[smi][0]
         num_torsion_angles = len(data.mask_rotate)
         num_tas_combinations = len(list(itertools.combinations(range(num_torsion_angles), 2)))
-        n_columns = int(plot_energy_landscape) + int(plot_sampled_confs) + int(plot_pt) * 2
+        n_columns = int(plot_energy_landscape) + int(plot_sampled_confs) + int(plot_pt)
         fig, ax = plt.subplots(num_tas_combinations,  n_columns, figsize=(4 * n_columns ,  4 * num_tas_combinations))
         ax = np.atleast_2d(ax)
         for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
@@ -195,8 +195,8 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_c
                 forward_kl = np.exp(logpTs_normalized) * (logpTs_normalized - logrew_normalized)
                 forward_kl = forward_kl.sum()   
                 #jsd = 1 / 2 *  (reverse_kl + forward_kl)
-                wandb.log({f"reverse_kl_{smi}_{ix0}_{ix1}": reverse_kl })
-                wandb.log({f"forward_kl_{smi}_{ix0}_{ix1}": forward_kl })
+                wandb.log({f"KL(PB||PF)_{smi}_{ix0}_{ix1}": reverse_kl })
+                wandb.log({f"KL(PF||PB)_{smi}_{ix0}_{ix1}": forward_kl })
 
             
             #print(ix0, ix1)
@@ -210,31 +210,23 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_c
                 ax[row, 0].set_ylabel(f'Torsion Angle {ix1}')
                 fig.colorbar(ax[row, 0].images[0], ax=ax[row, 0], orientation='vertical')
             
-            if plot_sampled_confs:
-                ax[row, 1].scatter(generated_stuff['tas'][smi][:,ix0], generated_stuff['tas'][smi][:,ix1], s = .5, c = 'red')
-                ax[row, 1].set_title('GFN samples')
+            if plot_pt: 
+            # Plot logpTs
+                ax[row, 1].imshow(np.array(logpTs).transpose(), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(logpTs), vmax=np.max(logpTs))
+                ax[row, 1].set_title('logpTs Landscape')
                 ax[row, 1].set_xlabel(f'Torsion Angle {ix0}')
                 ax[row, 1].set_ylabel(f'Torsion Angle {ix1}')
-                '''
-                n_tas = len(data.mask_rotate)
-                gt_tas = 1 + np.pi* np.array([ta for ta in itertools.product([0,1], repeat=n_tas)])
-                ax[1].scatter(np.array(gt_tas)[:,ix0], np.array(gt_tas)[:,ix1], s = 10, c = 'red' )
-                '''
-            
-            if plot_pt:
-            # Plot logpTs
-                ax[row, 2].imshow(np.array(logpTs).transpose(), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(logpTs), vmax=np.max(logpTs))
-                ax[row, 2].set_title('logpTs Landscape')
-                ax[row, 2].set_xlabel(f'Torsion Angle {ix0}')
-                ax[row, 2].set_ylabel(f'Torsion Angle {ix1}')
-                fig.colorbar(ax[row, 2].images[0], ax=ax[row, 2], orientation='vertical')
+                fig.colorbar(ax[row, 1].images[0], ax=ax[row, 1], orientation='vertical')
 
-            # Plot pTs  
-                ax[row, 3].imshow(np.exp(np.array(logpTs).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.exp(np.min(logpTs)), vmax=np.exp(np.max(logpTs)))
-                ax[row, 3].set_title('pTs Landscape')
-                ax[row, 3].set_xlabel(f'Torsion Angle {ix0}')
-                ax[row, 3].set_ylabel(f'Torsion Angle {ix1}')
-                fig.colorbar(ax[row, 3].images[0], ax=ax[row, 3], orientation='vertical')
+            
+            
+            if plot_sampled_confs:
+                ax[row, 2].scatter(generated_stuff['tas'][smi][:,ix0], generated_stuff['tas'][smi][:,ix1], s = .5, c = 'blue', marker='o', alpha=0.5)
+                if replay_tas is not None and len(replay_tas[smi][0]) > 0:
+                    ax[row, 2].scatter(torch.stack(replay_tas[smi][0])[:,ix0].cpu().numpy(), torch.stack(replay_tas[smi][0])[:,ix1].cpu().numpy(), s = .5, c = 'red', marker='^', alpha = 0.5)
+                ax[row, 2].set_title(f'samples GFN (blue) and RB (red)')
+                ax[row, 2].set_xlabel(f'Torsion Angle {ix0}')
+                ax[row, 2].set_ylabel(f'Torsion Angle {ix1}') 
             
                        
             

@@ -40,10 +40,15 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
     - sigma_max (float): Maximum noise variance at timestep T.
     - steps (int): Number of timesteps.
     - device (torch.device): CUDA or CPU device.
+    - p_expl (float): Probability of exploration.
+    - sample_mode (bool): Whether to use sampling mode or not. If False, computes the logpf and logpb at the same time as sampling the forward trajectory. If True, ignore the logpf and logpb computation.
     Returns:
     - traj (list): List of PyTorch geometric batch objects representing a batch of conformers at each timestep of the trajectory.
     '''
-    data = copy.deepcopy(Batch.from_data_list(conformers_input)).to(device)
+    if type(conformers_input) == list:
+        data = copy.deepcopy(Batch.from_data_list(conformers_input)).to(device)
+    else:
+        data = copy.deepcopy(conformers_input).to(device)
     for item in data:
         if type(data[item[0]]) == torch.Tensor:
             data[item[0]] = data[item[0]].to(device)
@@ -110,7 +115,7 @@ def sample_forward_trajs(conformers_input, model, train, sigma_min, sigma_max,  
     return traj, logit_pf, logit_pb
 
 
-def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), step_start = None , step_end = None):
+def sample_backward_trajs(conformers_input, sigma_min, sigma_max,  steps, device, step_start = None , step_end = None):
     '''
     Sample backward trajectories. N.B. all conformers should come from the same molecular graph.
     Args:
@@ -206,6 +211,8 @@ def get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, li
     else:
         logp = None
     return logit_pf, logit_pb, logp
+
+
 
 def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = 16):
     '''
@@ -556,7 +563,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                 synthetic_data = [x for l in synthetic_data for x in l]
                 gt_data = gt_data + synthetic_data
         if train_mode == 'gflownet':
-            samples_smi = [[copy.deepcopy(x) for _ in range(int(batch_size * (1 - p_replay))) ]  for x in gt_data] # shape: len(gt_data) x batch_size
+            samples_smi = [[copy.deepcopy(x) for _ in range(int(batch_size * (1 - p_replay))) ]  for x in gt_data] # shape: len(gt_data),  batch_size*(1 - p_replay)
             samples_smi = [perturb_seeds(x) for x in samples_smi] # apply uniform noise to torsion angles
             loss_smi = []
             confs_smi = []
@@ -586,12 +593,25 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                     TB_loss = torch.pow(logZ + logit_pf - logit_pb - logrew/T, 2)
                     loss = reduce(TB_loss, "bs -> ", "mean")
 
+                    flattened_grad = []
                     for param, g in zip(model.parameters(), grad):
                         if g is not None:
+                            flattened_grad.append(torch.flatten(g))
                             if param.grad is None:
                                 param.grad = g / len(dataset)
                             else:
                                 param.grad += g / len(dataset)
+                            
+                            
+                    
+                    #Log the max, min, mean and std of the grad
+                    flattened_grad = torch.cat(flattened_grad)
+                    if use_wandb:
+                        wandb.log({'mean(|grad|)': torch.abs(flattened_grad).mean().item()})
+                        wandb.log({'std(|grad|)': torch.abs(flattened_grad).std().item()})
+                        wandb.log({'max(|grad|)': torch.abs(flattened_grad).max().item()})
+                        wandb.log({'min(|grad|)': torch.abs(flattened_grad).min().item()})
+
                 else:
                     confs, loss, logit_pf, logit_pb, logrew = get_loss(traj_concat , logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
                     logZ = (logit_pb + logrew/T - logit_pf).detach()
@@ -711,7 +731,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             loss_type = dict[train_mode]
             wandb.log({loss_type: torch.stack(loss_tot).mean().item()})
 
-            wandb.log({f'logrew batch': torch.cat(logrews).mean().item()})
+            #wandb.log({f'logrew batch': torch.cat(logrews).mean().item()})
             #wandb.log({f'rmsds precision batch': np.mean(rmsds_precision).item()})
             #wandb.log({f'rmsds recall batch': np.mean(rmsds_recall).item()})
     

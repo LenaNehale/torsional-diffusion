@@ -1,5 +1,5 @@
 import math, os, torch, yaml
-from torch.utils.data import Subset
+from torch.utils.data import Subset 
 torch.multiprocessing.set_sharing_strategy('file_system')
 import numpy as np
 from rdkit import RDLogger
@@ -50,20 +50,20 @@ def train(args, model, optimizer):
     else:
         ReplayBuffer = None
     seed_everything(args.seed)
-    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}_use_synthetic_aug_{args.use_synthetic_aug}_lr_{args.lr}_temp_{args.rew_temp}"
+    exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}_use_synthetic_aug_{args.use_synthetic_aug}_lr_{args.lr}_T_{args.rew_temp}"
     if args.limit_train_mols == 1 : 
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
         wandb.login()
-        group = f"limit_train_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_diffusion_steps_{args.diffusion_steps}_lr_{args.lr}_temp_{args.rew_temp}"
+        group = f"n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_lr_{args.lr}_T_{args.rew_temp}"
         if args.limit_train_mols == 1 : 
             group += f"_smi_{args.train_smis}" 
-        run = wandb.init(project="gfn_torsional_diff", group = group )
+        run = wandb.init(project="gfn_torsional_diff", group = group[:127] )
         run.name = exp_path
     
     print("Starting GFN training ...")
     for epoch in range(args.n_epochs):        
-        for k in tqdm(range(args.num_sgd_steps)):  
+        for k in tqdm(range(args.num_sgd_steps)):     
             '''
             if k % 5 == 0: 
                 logpTs = []
@@ -73,9 +73,9 @@ def train(args, model, optimizer):
                     logpTs.append(logpT)
                 if args.use_wandb:
                     wandb.log({"logpT batch": torch.stack(logpTs).mean()})
-               '''
-
-            if k % 20 == 0:
+            '''
+            
+            if k % 100 == 0:
                 print('Saving the model ...')
                 # Save the current model in a folder model_chkpts
                 model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"
@@ -89,19 +89,20 @@ def train(args, model, optimizer):
                     if not os.path.exists(replaybuffer_path):
                         os.makedirs(replaybuffer_path)
                     positions_dict, tas_dict = ReplayBuffer.get_positions_and_tas(train_smis)
-                    pickle.dump([positions_dict, tas_dict], open(f'{replaybuffer_path}/{exp_path}.pkl', 'wb'))
+                    pickle.dump({"rb_positions": positions_dict, "rb_tas": tas_dict}, open(f'{replaybuffer_path}/{exp_path}_{k}.pkl', 'wb'))
+                else:
+                    positions_dict, tas_dict = None, None
                 
                 
-                print('Generating gfn samples and learned energy landscape...')
-                generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, train_mode = 'gflownet')
-                torch.cuda.empty_cache()
-                plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, exp_path = exp_path, timestep = f"_time_{k}", ode = args.ode )
-    
+                if args.run_eval:
+                    print('Generating gfn samples and learned energy landscape...')
+                    generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, train_mode = 'gflownet')
+                    torch.cuda.empty_cache()
+                    plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, exp_path = exp_path, timestep = f"_time_{k}", ode = args.ode, replay_tas= tas_dict )
+                
             idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
             subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
             results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc, use_synthetic_aug = args.use_synthetic_aug)      
-        
-        print("Epoch {}: Training Loss {}".format(epoch, torch.mean(results[0])))
     
 
 
