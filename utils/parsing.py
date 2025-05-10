@@ -17,7 +17,7 @@ def parse_train_args():
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
-    parser.add_argument('--use_wandb', action='store_true', default=True, help='Whether to use wandb')
+    parser.add_argument('--use_wandb', type= bool, default=True, help='Whether to use wandb')
 
     
     #data arguments      
@@ -25,7 +25,7 @@ def parse_train_args():
     parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
     parser.add_argument('--use_synthetic_aug', type=bool, default= False, help='Whether to use synthetic augmentation')
 
-    parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N"  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N  C[C@@H]1CCCC[C@@H]1C  COc1ccccc1   CCC"  , help='train SMILES strings for which to generate conformers')
     parser.add_argument('--limit_train_mols', type=int, default=None, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')

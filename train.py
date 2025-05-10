@@ -6,7 +6,7 @@ from rdkit import RDLogger
 from utils.dataset import construct_loader, make_dataset_from_smi
 from utils.parsing import parse_train_args
 from utils.training import train_epoch, test_epoch
-from gflownet.gfn_train import gfn_sgd, get_logpT
+from gflownet.gfn_train import gfn_sgd, get_logpT 
 from gflownet.replay_buffer import ReplayBufferClass
 from utils.utils import get_model, get_optimizer_and_scheduler
 from argparse import Namespace 
@@ -55,55 +55,57 @@ def train(args, model, optimizer):
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
         wandb.login()
-        group = f"n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_lr_{args.lr}_T_{args.rew_temp}"
+        group = f"n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_lr_{args.lr}_T_{args.rew_temp}_nlayers_{args.num_conv_layers}_icml"
         if args.limit_train_mols == 1 : 
             group += f"_smi_{args.train_smis}" 
         run = wandb.init(project="gfn_torsional_diff", group = group[:127] )
         run.name = exp_path
     
     print("Starting GFN training ...")
-    for epoch in range(args.n_epochs):        
-        for k in tqdm(range(args.num_sgd_steps)):     
-            '''
-            if k % 5 == 0: 
-                logpTs = []
-                for smi in train_smis:
-                    subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
-                    logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs)
-                    logpTs.append(logpT)
-                if args.use_wandb:
-                    wandb.log({"logpT batch": torch.stack(logpTs).mean()})
-            '''
+    for k in tqdm(range(args.num_sgd_steps)):     
+        if k % 100 == 0:
+            print('Saving the model ...')
+            # Save the current model in a folder model_chkpts
+            model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"
+            if not os.path.exists(f'{model_path}'):
+                os.makedirs(f'{model_path}')
+            torch.save(model.state_dict(), f'{model_path}/{exp_path}.pt')
             
-            if k % 100 == 0:
-                print('Saving the model ...')
-                # Save the current model in a folder model_chkpts
-                model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"
-                if not os.path.exists(f'{model_path}'):
-                    os.makedirs(f'{model_path}')
-                torch.save(model.state_dict(), f'{model_path}/{exp_path}.pt')
-                
-                print('Saving replay buffer ...')
-                if ReplayBuffer is not None:
-                    replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/replay_buffer'
-                    if not os.path.exists(replaybuffer_path):
-                        os.makedirs(replaybuffer_path)
-                    positions_dict, tas_dict = ReplayBuffer.get_positions_and_tas(train_smis)
-                    pickle.dump({"rb_positions": positions_dict, "rb_tas": tas_dict}, open(f'{replaybuffer_path}/{exp_path}_{k}.pkl', 'wb'))
-                else:
-                    positions_dict, tas_dict = None, None
-                
-                
-                if args.run_eval:
-                    print('Generating gfn samples and learned energy landscape...')
-                    generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, train_mode = 'gflownet')
-                    torch.cuda.empty_cache()
-                    plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, exp_path = exp_path, timestep = f"_time_{k}", ode = args.ode, replay_tas= tas_dict )
-                
-            idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
-            subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
-            results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc, use_synthetic_aug = args.use_synthetic_aug)      
+            print('Saving replay buffer ...')
+            if ReplayBuffer is not None:
+                replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/replay_buffer'
+                if not os.path.exists(replaybuffer_path):
+                    os.makedirs(replaybuffer_path)
+                positions_dict, tas_dict = ReplayBuffer.get_positions_and_tas(train_smis)
+                pickle.dump({"rb_positions": positions_dict, "rb_tas": tas_dict}, open(f'{replaybuffer_path}/{exp_path}_{k}.pkl', 'wb'))
+            else:
+                positions_dict, tas_dict = None, None
+            
+            
+            if args.run_eval:
+                print('Generating gfn samples and learned energy landscape...')
+                generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, train_mode = 'gflownet')
+                torch.cuda.empty_cache()
+                plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, exp_path = exp_path, sgd_step = k, ode = args.ode, replay_tas= tas_dict )
+            
+        
+            logpTs = []
+            for smi in train_smis:
+                subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = 64, max_n_local_structures = np.inf) 
+                logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs) # effectuve bs: n_local_structures * num_back_trajs
+                logpTs.append(logpT)
+                print(f"LogpT {smi}: {logpT.mean()}")
+                if args.use_wandb:
+                    wandb.log({f"logpT {smi}": logpT.mean()})
+        
+            
     
+        
+        
+        idx_train = np.random.randint(0, args.limit_train_mols, size = args.n_smis_batch)
+        subset = make_dataset_from_smi(train_smis[idx_train], init_positions_path=args.init_positions_path, n_local_structures = args.n_local_structures, max_n_local_structures = args.max_n_local_structures)
+        results = gfn_sgd(model, subset, optimizer, device,  args.sigma_min, args.sigma_max, args.diffusion_steps, train = True, batch_size = args.batch_size_train ,  T=args.rew_temp,  logrew_clamp = args.logrew_clamp, energy_fn = args.energy_fn, train_mode = args.train_mode, use_wandb = args.use_wandb, ReplayBuffer = ReplayBuffer, p_expl = args.p_expl, p_replay = args.p_replay, grad_acc = args.grad_acc, use_synthetic_aug = args.use_synthetic_aug, sgd_step = k)      
+
 
 
 

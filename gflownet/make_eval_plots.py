@@ -13,8 +13,7 @@ import numpy as np
 import os
 import itertools
 import wandb
-
-
+import math
 
 
 def load_model(exp_path, device):
@@ -61,7 +60,7 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
 
     n_smis = len(smis)
 
-    for i in range(n_smis // n_smis_batch):
+    for i in range(math.ceil(n_smis / n_smis_batch)):
         smis_subset = smis[n_smis_batch * i : n_smis_batch * (i + 1) ]
         print('smis subset', smis_subset)
         confs_init_smis_subset = make_dataset_from_smi(smis_subset, init_positions_path = init_positions_path, n_local_structures = n_local_structures, max_n_local_structures= max_n_local_structures)
@@ -86,7 +85,8 @@ def generate_stuff(model, smis, n_smis_batch, batch_size, diffusion_steps, T, lo
                                                                                     ReplayBuffer = None, 
                                                                                     p_expl = 0.0, 
                                                                                     p_replay = 0.0, 
-                                                                                    grad_acc = False)
+                                                                                    grad_acc = False, 
+                                                                                    sgd_step = None)
 
 
         conformers_gen_subset = {smi: item for smi, item in zip(smis_subset, conformers_gen_subset)}
@@ -168,78 +168,84 @@ def get_logrew_heatmap(data, model, sigma_min, sigma_max,  steps, device, num_po
     return np.array(logrew_landscape), np.array(logpTs)
 
 
-# Visualize the logpTs landscape vs the ground truth energy for a molecule with 2 torsion angles
+# Visualize the logpTs landscape vs the ground truth energy vs the sampled conformers for a molecule on 2D 
 
-def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_clamp, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, exp_path, timestep, ode = False, replay_tas = None):
+def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_clamp, init_positions_path, n_local_structures, max_n_local_structures, sigma_min, sigma_max,  steps, device, num_points, num_trajs, T,  plot_energy_landscape, plot_sampled_confs, plot_pt, use_wandb, exp_path, sgd_step, ode = False, replay_tas = None):
+    '''
+    
+    '''
     if plot_pt == False:
         model = None
     for smi in smis:
-        data = make_dataset_from_smi([smi], init_positions_path=init_positions_path , n_local_structures = 1, max_n_local_structures=1)[smi][0]
-        num_torsion_angles = len(data.mask_rotate)
-        num_tas_combinations = len(list(itertools.combinations(range(num_torsion_angles), 2)))
-        n_columns = int(plot_energy_landscape) + int(plot_sampled_confs) + int(plot_pt)
-        fig, ax = plt.subplots(num_tas_combinations,  n_columns, figsize=(4 * n_columns ,  4 * num_tas_combinations))
-        ax = np.atleast_2d(ax)
-        for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
-            row = ix0 //num_torsion_angles + ix1 - 1
-            logrew_landscape, logpTs = get_logrew_heatmap(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0 = ix0, ix1 = ix1, energy_fn = energy_fn, ode = ode, num_trajs = num_trajs, T = T  , logrew_clamp = logrew_clamp, get_pt = plot_pt)
-            if use_wandb:
-                # log correlation between logpT and logrew
-                corr = np.corrcoef(logpTs.flatten(), logrew_landscape.flatten())[0, 1]
-                wandb.log({f"corr_{smi}_{ix0}_{ix1}": corr})
-                # Log KL divergence between logpT and logrew
-                logrew_normalized = logrew_landscape - np.log(np.exp(logrew_landscape).sum())
-                logpTs_normalized = logpTs - np.log(np.exp(logpTs).sum())
-                reverse_kl =  np.exp(logrew_normalized) * (logrew_normalized - logpTs_normalized)
-                reverse_kl = reverse_kl.sum()
-                forward_kl = np.exp(logpTs_normalized) * (logpTs_normalized - logrew_normalized)
-                forward_kl = forward_kl.sum()   
-                #jsd = 1 / 2 *  (reverse_kl + forward_kl)
-                wandb.log({f"KL(PB||PF)_{smi}_{ix0}_{ix1}": reverse_kl })
-                wandb.log({f"KL(PF||PB)_{smi}_{ix0}_{ix1}": forward_kl })
+        dataset = make_dataset_from_smi([smi], init_positions_path=init_positions_path , n_local_structures = n_local_structures, max_n_local_structures=max_n_local_structures)[smi]
+        for ls in range(n_local_structures):
+            data = dataset[ls]
+            num_torsion_angles = len(data.mask_rotate)
+            num_tas_combinations = len(list(itertools.combinations(range(num_torsion_angles), 2)))
+            n_columns = int(plot_energy_landscape) + int(plot_sampled_confs) + int(plot_pt)
+            fig, ax = plt.subplots(num_tas_combinations,  n_columns, figsize=(4 * n_columns ,  4 * num_tas_combinations))
+            ax = np.atleast_2d(ax)
+            for ix0, ix1 in itertools.combinations(range(num_torsion_angles), 2):
+                row = ix0 //num_torsion_angles + ix1 - 1
+                logrew_landscape, logpTs = get_logrew_heatmap(data, model, sigma_min, sigma_max,  steps, device, num_points, ix0 = ix0, ix1 = ix1, energy_fn = energy_fn, ode = ode, num_trajs = num_trajs, T = T  , logrew_clamp = logrew_clamp, get_pt = plot_pt)
+                if use_wandb:
+                    # log correlation between logpT and logrew
+                    corr = np.corrcoef(logpTs.flatten(), logrew_landscape.flatten())[0, 1]
+                    wandb.log({f"corr_{smi}_{ix0}_{ix1}": corr}, step = sgd_step)
+                    # Log KL divergence between logpT and logrew
+                    logrew_normalized = logrew_landscape - np.log(np.exp(logrew_landscape).sum())
+                    logpTs_normalized = logpTs - np.log(np.exp(logpTs).sum())
+                    reverse_kl =  np.exp(logrew_normalized) * (logrew_normalized - logpTs_normalized)
+                    reverse_kl = reverse_kl.sum()
+                    forward_kl = np.exp(logpTs_normalized) * (logpTs_normalized - logrew_normalized)
+                    forward_kl = forward_kl.sum()   
+                    wandb.log({f"KL(PB||PF)_{smi}_{ix0}_{ix1}": reverse_kl }, step = sgd_step)
+                    wandb.log({f"KL(PF||PB)_{smi}_{ix0}_{ix1}": forward_kl }, step = sgd_step)
+                    jsd = None #todo add it
 
-            
-            #print(ix0, ix1)
-            # Plot energy landscape
-            if plot_energy_landscape:
-                #ax[0].imshow( 100 * np.log(np.array(energy_landscape).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
-                print(ix0 //num_torsion_angles + ix1 - 1, 0)
-                ax[ row, 0].imshow(  logrew_landscape.transpose() , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=   np.min(logrew_landscape), vmax=  np.max(logrew_landscape))
-                ax[ row, 0].set_title('Logrew Landscape')
-                ax[ row, 0].set_xlabel(f'Torsion Angle {ix0}')
-                ax[row, 0].set_ylabel(f'Torsion Angle {ix1}')
-                fig.colorbar(ax[row, 0].images[0], ax=ax[row, 0], orientation='vertical')
-            
-            if plot_pt: 
-            # Plot logpTs
-                ax[row, 1].imshow(np.array(logpTs).transpose(), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(logpTs), vmax=np.max(logpTs))
-                ax[row, 1].set_title('logpTs Landscape')
-                ax[row, 1].set_xlabel(f'Torsion Angle {ix0}')
-                ax[row, 1].set_ylabel(f'Torsion Angle {ix1}')
-                fig.colorbar(ax[row, 1].images[0], ax=ax[row, 1], orientation='vertical')
+                
+                #print(ix0, ix1)
+                # Plot energy landscape
+                if plot_energy_landscape:
+                    #ax[0].imshow( 100 * np.log(np.array(energy_landscape).transpose()), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r')
+                    print(ix0 //num_torsion_angles + ix1 - 1, 0)
+                    ax[ row, 0].imshow(  logrew_landscape.transpose() , extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=   np.min(logrew_landscape), vmax=  np.max(logrew_landscape))
+                    ax[ row, 0].set_title('Logrew Landscape')
+                    ax[ row, 0].set_xlabel(f'Torsion Angle {ix0}')
+                    ax[row, 0].set_ylabel(f'Torsion Angle {ix1}')
+                    fig.colorbar(ax[row, 0].images[0], ax=ax[row, 0], orientation='vertical')
+                
+                if plot_pt: 
+                # Plot logpTs
+                    ax[row, 1].imshow(np.array(logpTs).transpose(), extent=[0, 2 * np.pi, 0, 2 * np.pi], origin='lower', aspect='auto', cmap='viridis_r', vmin=np.min(logpTs), vmax=np.max(logpTs))
+                    ax[row, 1].set_title('logpTs Landscape')
+                    ax[row, 1].set_xlabel(f'Torsion Angle {ix0}')
+                    ax[row, 1].set_ylabel(f'Torsion Angle {ix1}')
+                    fig.colorbar(ax[row, 1].images[0], ax=ax[row, 1], orientation='vertical')
 
+                
+                
+                if plot_sampled_confs:
+                    ax[row, 2].scatter(generated_stuff['tas'][smi][:,ix0], generated_stuff['tas'][smi][:,ix1], s = .5, c = 'blue', marker='o', alpha=0.5)
+                    if replay_tas is not None and len(replay_tas[smi][0]) > 0:
+                        ax[row, 2].scatter(torch.stack(replay_tas[smi][0])[:,ix0].cpu().numpy(), torch.stack(replay_tas[smi][0])[:,ix1].cpu().numpy(), s = .5, c = 'red', marker='^', alpha = 0.5)
+                    ax[row, 2].set_title(f'samples GFN (blue) and RB (red)')
+                    ax[row, 2].set_xlabel(f'Torsion Angle {ix0}')
+                    ax[row, 2].set_ylabel(f'Torsion Angle {ix1}') 
+                
+                        
+                
+            plt.tight_layout()
+            if exp_path is not None:
+                if not os.path.exists(f'/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples'):
+                    os.makedirs(f'/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples')
+                plt.savefig(f"/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples/{exp_path}_{smi}_ls_{ls}_timestep_{sgd_step}.png")
+            plt.title('Smi ' + smi + ' - Local structure ' + str(ls))
+            plt.show()
+            plt.close(fig)
+            #if use_wandb:
+                #wandb.log({f"energy_samples_logpTs_{smi}": wandb.Image(plt)})
             
-            
-            if plot_sampled_confs:
-                ax[row, 2].scatter(generated_stuff['tas'][smi][:,ix0], generated_stuff['tas'][smi][:,ix1], s = .5, c = 'blue', marker='o', alpha=0.5)
-                if replay_tas is not None and len(replay_tas[smi][0]) > 0:
-                    ax[row, 2].scatter(torch.stack(replay_tas[smi][0])[:,ix0].cpu().numpy(), torch.stack(replay_tas[smi][0])[:,ix1].cpu().numpy(), s = .5, c = 'red', marker='^', alpha = 0.5)
-                ax[row, 2].set_title(f'samples GFN (blue) and RB (red)')
-                ax[row, 2].set_xlabel(f'Torsion Angle {ix0}')
-                ax[row, 2].set_ylabel(f'Torsion Angle {ix1}') 
-            
-                       
-            
-        plt.tight_layout()
-        if exp_path is not None:
-            if not os.path.exists(f'/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples'):
-                os.makedirs(f'/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples')
-            plt.savefig(f"/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/gfn_samples/{exp_path}_{smi}_{timestep}.png")
-        plt.show()
-        plt.close(fig)
-        #if use_wandb:
-            #wandb.log({f"energy_samples_logpTs_{smi}": wandb.Image(plt)})
-        
         
 
         

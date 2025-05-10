@@ -12,4 +12,4 @@ module load anaconda/3
 # Activate a virtual environment, if needed:
 conda activate torsional_diffusion
 
-python train.py "$@"
+python /home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/train.py "$@"

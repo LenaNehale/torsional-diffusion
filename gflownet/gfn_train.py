@@ -264,13 +264,12 @@ def get_logpT(conformers, model, sigma_min, sigma_max,  steps, device = torch.de
 
     else:
         conformers = [ x for x in conformers for _ in range(num_trajs)]
-        traj = sample_backward_trajs(conformers, sigma_min, sigma_max,  steps)
+        traj = sample_backward_trajs(conformers, sigma_min, sigma_max,  steps, device)
         logit_pf, logit_pb, logp = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False)
         logit_pf, logit_pb = logit_pf.reshape( -1, num_trajs), logit_pb.reshape( -1, num_trajs)
         g_0 = sigma_schedule[0] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))
         g_T = sigma_schedule[-1] * torch.sqrt(torch.tensor(2 * np.log(sigma_max / sigma_min)))  
         log_normalisation_cst = torch.log( g_0 / g_T)
-        #print('log_normalisation_cst', log_normalisation_cst, 'logit pf', logit_pf, 'logit pb', logit_pb)
         logp = torch.logsumexp(logit_pf - logit_pb - log_normalisation_cst , dim = -1)
         #Empty Cuda memory
         del logit_pf, logit_pb
@@ -538,7 +537,7 @@ def get_rmsds(mols0, mols1):
         rmsds.append(fast_rmsd(mol0, mol1 , conf1=0, conf2=0))
     return rmsds
 
-def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, grad_acc = False, use_synthetic_aug = True):
+def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps, train, T, batch_size, logrew_clamp, energy_fn, train_mode, use_wandb, ReplayBuffer, p_expl, p_replay, sgd_step, grad_acc = False, use_synthetic_aug = False):
     if train:
         model.train() # set model to training mode
     else:
@@ -573,11 +572,20 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             logZ_smi = []
             for samples in samples_smi:
                 traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
-            
+                #if use_wandb:
+                    #wandb.log({f'logit_pf_gfn_{smi}': logit_pf.mean().item()}, step = sgd_step)
+                    #wandb.log({f'logit_pb_gfn_{smi}': logit_pb.mean().item()}, step = sgd_step)
+                
+                
                 if train and ReplayBuffer is not None and ReplayBuffer.get_len(samples[0].canonical_smi,samples[0].local_structure_id ) > int(batch_size*p_replay) :
                     final_states_replay, _ = ReplayBuffer.sample( samples[0].canonical_smi, samples[0].local_structure_id,  int(batch_size*p_replay))
-                    traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps)
+                    traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps, device)
                     logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
+                    #if use_wandb:
+                       #wandb.log({f'logit_pf_rb_{smi}': logit_pf.mean().item()}, step = sgd_step)
+                       #wandb.log({f'logit_pb_rb_{smi}': logit_pb.mean().item()}, step = sgd_step)
+                
+                
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
                 
@@ -604,13 +612,15 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                             
                             
                     
+                    '''
                     #Log the max, min, mean and std of the grad
                     flattened_grad = torch.cat(flattened_grad)
                     if use_wandb:
-                        wandb.log({'mean(|grad|)': torch.abs(flattened_grad).mean().item()})
-                        wandb.log({'std(|grad|)': torch.abs(flattened_grad).std().item()})
-                        wandb.log({'max(|grad|)': torch.abs(flattened_grad).max().item()})
-                        wandb.log({'min(|grad|)': torch.abs(flattened_grad).min().item()})
+                        wandb.log({'mean(|grad|)': torch.abs(flattened_grad).mean().item()}, step = sgd_step)
+                        wandb.log({'std(|grad|)': torch.abs(flattened_grad).std().item()}, step = sgd_step)
+                        wandb.log({'max(|grad|)': torch.abs(flattened_grad).max().item()}, step = sgd_step)
+                        wandb.log({'min(|grad|)': torch.abs(flattened_grad).min().item()}, step = sgd_step)
+                    '''
 
                 else:
                     confs, loss, logit_pf, logit_pb, logrew = get_loss(traj_concat , logit_pf_concat, logit_pb_concat, model, device, sigma_min, sigma_max,  steps, likelihood=False, energy_fn=energy_fn, T=T, train=train, loss='vargrad', logrew_clamp = logrew_clamp)
@@ -638,12 +648,12 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             log_normalisation_cst = - torch.log( g_0 / g_T)
             logZ_smi_normalised = logZ_smi - log_normalisation_cst
             if use_wandb:
-                wandb.log({f'logZ_{smi}': logZ_smi_normalised.item()})
+                wandb.log({f'logZ_{smi}': logZ_smi_normalised.item()}, step = sgd_step)
             
             
             if ReplayBuffer is not None and use_wandb:
                 rb_logrew_mean_smi = ReplayBuffer.get_logrews(smi, samples[0].local_structure_id ).mean()
-                wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi })   
+                wandb.log({f'RB_logrew_{smi}': rb_logrew_mean_smi }, step = sgd_step)   
         
         
         elif train_mode =='diffusion':
@@ -654,8 +664,8 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
         
         elif train_mode == 'mle': 
             # sample backward trajectories. Samples in gt_data don't need to have the same local structure
-            traj = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
-            #traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps)
+            traj = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps, device)
+            #traj_bis = sample_backward_trajs(gt_data, sigma_min, sigma_max,  steps, device)
             logit_pf_smi, logit_pb_smi, logp_smi = get_log_p_f_and_log_pb(traj, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
             if grad_acc:
                 grad, logit_pf_smi, logit_pb_smi = mle_loss_gradacc(traj, logit_pf_smi, logit_pb_smi, model, device, sigma_min, sigma_max,  steps, likelihood=False, use_logit_pb = False)
@@ -671,8 +681,8 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             loss_consistency = 0.0
             #print('KL loss', loss_kl, 'consistency loss', loss_consistency)
             #if use_wandb:
-                    #wandb.log({'KL loss': loss_kl.item()})
-                    #wandb.log({'consistency loss': loss_consistency.item()})
+                    #wandb.log({'KL loss': loss_kl.item()}, step = sgd_step)
+                    #wandb.log({'consistency loss': loss_consistency.item()}, step = sgd_step)
             loss_smi = loss_kl + 0.0 *loss_consistency
 
         else:
@@ -692,8 +702,8 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             gen_mols = np.array([pyg_to_mol(conf.mol, conf, copy=True) for conf in confs_smi]).reshape(bs, -1)
             rmsds = np.array([get_rmsds([gt_mols[i] for _ in range(bs)], gen_mols[:,i]) for i in range(len(gt_mols))]) # n_gt, bs
             if use_wandb:
-                wandb.log({f"RMSD avg {smi}": np.mean(rmsds).item()})
-                wandb.log({f"RMSD min {smi}":  np.min(rmsds, axis = 1).mean().item()})
+                wandb.log({f"RMSD avg {smi}": np.mean(rmsds).item()}, step = sgd_step)
+                wandb.log({f"RMSD min {smi}":  np.min(rmsds, axis = 1).mean().item()}, step = sgd_step)
             
             logZ_smi = (logit_pb_on_policy + logrew_smi/T - logit_pf_on_policy).detach()
             logZ_smi = reduce(logZ_smi, "bs -> ", "mean")
@@ -704,12 +714,12 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
             log_normalisation_cst = - torch.log( g_0 / g_T)
             logZ_smi_normalised = logZ_smi - log_normalisation_cst
             if use_wandb:
-                wandb.log({f'logZ_{smi}': logZ_smi_normalised.item()})
+                wandb.log({f'logZ_{smi}': logZ_smi_normalised.item()}, step = sgd_step)
 
 
         if use_wandb:
-            wandb.log({f'logrew mean {smi}': logrew_smi.mean().item()})
-            wandb.log({f'loss {smi}': loss_smi.item()})
+            wandb.log({f'mean logrew {smi}': logrew_smi.mean().item()}, step = sgd_step)
+            wandb.log({f'loss {smi}': loss_smi.item()}, step = sgd_step)
 
         loss_tot.append( loss_smi / len(dataset))
         conformers.append(confs_smi)
@@ -729,18 +739,15 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
         if  use_wandb:
             dict = {'gflownet': 'vargrad loss', 'diffusion': 'diffusion_loss', 'mle': 'mle loss'}
             loss_type = dict[train_mode]
-            wandb.log({loss_type: torch.stack(loss_tot).mean().item()})
+            wandb.log({loss_type: torch.stack(loss_tot).mean().item()}, step = sgd_step)
 
-            #wandb.log({f'logrew batch': torch.cat(logrews).mean().item()})
-            #wandb.log({f'rmsds precision batch': np.mean(rmsds_precision).item()})
-            #wandb.log({f'rmsds recall batch': np.mean(rmsds_recall).item()})
+            #wandb.log({f'logrew batch': torch.cat(logrews).mean().item()}, step = sgd_step)
+            #wandb.log({f'rmsds precision batch': np.mean(rmsds_precision).item()}, step = sgd_step)
+            #wandb.log({f'rmsds recall batch': np.mean(rmsds_recall).item()}, step = sgd_step)
     
     
 
-    #TODO return dictionaries, per-smile and per-local-structure      
+    #TODO return dictionaries, per-smile and per-local-structure. define a fct log_training_metrics that takes as input the outputs of gfn_sgd and logs the wandb stuff     
     return torch.stack(loss_tot), conformers, logit_pfs, logit_pbs, logrews, total_perturbs, trajs
 
         
-
-
-

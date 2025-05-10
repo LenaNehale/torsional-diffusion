@@ -13,7 +13,7 @@ import diffusion.torus as torus
 
 class TensorProductConvLayer(torch.nn.Module):
     def __init__(self, in_irreps, sh_irreps, out_irreps, n_edge_features, residual=True, batch_norm=True):
-        super(TensorProductConvLayer, self).__init__()
+        super(TensorProductConvLayer, self).__init__() 
         self.in_irreps = in_irreps
         self.out_irreps = out_irreps
         self.sh_irreps = sh_irreps

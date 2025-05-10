@@ -12,4 +12,4 @@ module load anaconda/3
 # Activate a virtual environment, if needed:
 conda activate torsional_diffusion
 
-py-spy record -o profile.svg -- python train.py --n_epochs 4 
+py-spy record -o profile.svg -- python train.py 
