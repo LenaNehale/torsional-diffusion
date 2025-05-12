@@ -25,7 +25,9 @@ def parse_train_args():
     parser.add_argument('--init_positions_path', type=str, default="/home/mila/l/lena-nehale.ezzine/ai4mols/torsional-diffusion/data/md_trajs_dict.pkl", help='Path to the initial positions of conformers')
     parser.add_argument('--use_synthetic_aug', type=bool, default= False, help='Whether to use synthetic augmentation')
 
-    parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N  C[C@@H]1CCCC[C@@H]1C  COc1ccccc1   CCC"  , help='train SMILES strings for which to generate conformers')
+    #parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N  C[C@@H]1CCCC[C@@H]1C  COc1ccccc1   CCC"  , help='train SMILES strings for which to generate conformers')
+    parser.add_argument('--train_smis', type=str, default=   "C[C@@H]1CCCC[C@@H]1C  COc1ccccc1"  , help='train SMILES strings for which to generate conformers')
+
     parser.add_argument('--limit_train_mols', type=int, default=None, help='Limit to the number of molecules in dataset, 0 uses them all')
     parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
@@ -61,7 +63,7 @@ def parse_train_args():
     # other training arguments
     parser.add_argument('--num_sgd_steps', type=int, default=60000, help='Number of SGD steps for one epoch')
     parser.add_argument('--n_epochs', type=int, default=1, help='Number of epochs for training')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Initial learning rate')
+    parser.add_argument('--lr', type=float, default=1e-4, help='Initial learning rate')
     parser.add_argument('--num_workers', type=int, default=1, help='Number of workers for preprocessing')
     parser.add_argument('--optimizer', type=str, default='adam', help='Adam optimiser only one supported')
     parser.add_argument('--scheduler', type=str, default='plateau', help='LR scehduler: plateau or none')

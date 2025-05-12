@@ -55,7 +55,7 @@ def train(args, model, optimizer):
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
         wandb.login()
-        group = f"n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_lr_{args.lr}_T_{args.rew_temp}_nlayers_{args.num_conv_layers}_icml"
+        group = f"localsearch_n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_lr_{args.lr}_T_{args.rew_temp}_nlayers_{args.num_conv_layers}_icml"
         if args.limit_train_mols == 1 : 
             group += f"_smi_{args.train_smis}" 
         run = wandb.init(project="gfn_torsional_diff", group = group[:127] )
@@ -89,14 +89,15 @@ def train(args, model, optimizer):
                 plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, exp_path = exp_path, sgd_step = k, ode = args.ode, replay_tas= tas_dict )
             
         
-            logpTs = []
-            for smi in train_smis:
-                subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = 64, max_n_local_structures = np.inf) 
-                logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs) # effectuve bs: n_local_structures * num_back_trajs
-                logpTs.append(logpT)
-                print(f"LogpT {smi}: {logpT.mean()}")
-                if args.use_wandb:
-                    wandb.log({f"logpT {smi}": logpT.mean()})
+                print('Computing loglikelihood of a batch of MD data ...')
+                logpTs = []
+                for smi in train_smis:
+                    subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = 64, max_n_local_structures = np.inf) 
+                    logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs) # effectuve bs: n_local_structures * num_back_trajs
+                    logpTs.append(logpT)
+                    print(f"LogpT {smi}: {logpT.mean()}")
+                    if args.use_wandb:
+                        wandb.log({f"logpT {smi}": logpT.mean()})
         
             
     

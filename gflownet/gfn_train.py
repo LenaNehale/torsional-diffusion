@@ -562,23 +562,34 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                 synthetic_data = [x for l in synthetic_data for x in l]
                 gt_data = gt_data + synthetic_data
         if train_mode == 'gflownet':
-            samples_smi = [[copy.deepcopy(x) for _ in range(int(batch_size * (1 - p_replay))) ]  for x in gt_data] # shape: len(gt_data),  batch_size*(1 - p_replay)
-            samples_smi = [perturb_seeds(x) for x in samples_smi] # apply uniform noise to torsion angles
+            samples_smi = [perturb_seeds([x]) for x in gt_data] # apply uniform noise to torsion angles
+            # samples_smi = [[copy.deepcopy(x) for _ in range(int(batch_size * (1 - p_replay))) ]  for x in gt_data] # shape: len(gt_data),  batch_size*(1 - p_replay)
             loss_smi = []
             confs_smi = []
             logit_pf_smi = []
             logit_pb_smi = []
             logrew_smi = []
             logZ_smi = []
-            for samples in samples_smi:
-                traj, logit_pf, logit_pb = sample_forward_trajs(samples, model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False)
+            for sample in samples_smi:
+                root_size = steps // 2  
+                n_leaves = int(batch_size * (1 - p_replay))
+                traj, logit_pf, logit_pb = None , [], []
+                traj_root, logit_pf_root, logit_pb_root = sample_forward_trajs(sample, model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False, step_start = 0, step_end = root_size)
+                trajs_root = copy.deepcopy(traj_root)
+                for i in range(n_leaves - 1):
+                    trajs_root = concat(trajs_root, traj_root)
+                logit_pf_root = torch.stack([logit_pf_root for _ in range(n_leaves )]).squeeze(-1)
+                logit_pb_root = torch.stack([logit_pb_root for _ in range(n_leaves )]).squeeze(-1)
+                trajs_leaf, logit_pf_leaf, logit_pb_leaf = sample_forward_trajs(Batch.to_data_list(trajs_root[-1]), model, train = False if grad_acc else train, sigma_min =  sigma_min, sigma_max = sigma_max,  steps = steps, device = device, p_expl = p_expl, sample_mode = False, step_start = root_size, step_end = steps)
+                traj, logit_pf, logit_pb = trajs_root +  trajs_leaf[1:], logit_pf_root + logit_pf_leaf , logit_pb_root + logit_pb_leaf
+
                 #if use_wandb:
                     #wandb.log({f'logit_pf_gfn_{smi}': logit_pf.mean().item()}, step = sgd_step)
                     #wandb.log({f'logit_pb_gfn_{smi}': logit_pb.mean().item()}, step = sgd_step)
                 
                 
-                if train and ReplayBuffer is not None and ReplayBuffer.get_len(samples[0].canonical_smi,samples[0].local_structure_id ) > int(batch_size*p_replay) :
-                    final_states_replay, _ = ReplayBuffer.sample( samples[0].canonical_smi, samples[0].local_structure_id,  int(batch_size*p_replay))
+                if train and ReplayBuffer is not None and ReplayBuffer.get_len(sample[0].canonical_smi, sample[0].local_structure_id ) > int(batch_size*p_replay) :
+                    final_states_replay, _ = ReplayBuffer.sample( sample[0].canonical_smi, sample[0].local_structure_id,  int(batch_size*p_replay))
                     traj_replay = sample_backward_trajs(final_states_replay, sigma_min, sigma_max,  steps, device)
                     logit_pf_replay, logit_pb_replay, _ = get_log_p_f_and_log_pb(traj_replay, model, device, sigma_min, sigma_max,  steps, likelihood=False, train=False if grad_acc else train)
                     #if use_wandb:
@@ -589,7 +600,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                 else:
                     traj_replay, logit_pf_replay, logit_pb_replay = None, None, None
                 
-                if ReplayBuffer is not None and ReplayBuffer.get_len(samples[0].canonical_smi,samples[0].local_structure_id ) > int(batch_size*p_replay) and len(final_states_replay) > 0:    
+                if ReplayBuffer is not None and ReplayBuffer.get_len(sample[0].canonical_smi,sample[0].local_structure_id ) > int(batch_size*p_replay) and len(final_states_replay) > 0:    
                     traj_concat, logit_pf_concat, logit_pb_concat = concat(traj, traj_replay), torch.cat((logit_pf, logit_pf_replay)), torch.cat((logit_pb, logit_pb_replay))
                 else:
                     traj_concat, logit_pf_concat, logit_pb_concat = traj, logit_pf, logit_pb
@@ -630,7 +641,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
                 logZ_smi.append(logZ)
             
                 if ReplayBuffer is not None:
-                    ReplayBuffer.update(samples[0].canonical_smi, samples[0].local_structure_id, confs[:batch_size], logrew[:batch_size]) # discard the elements that were already present in the replay buffer
+                    ReplayBuffer.update(sample[0].canonical_smi, sample[0].local_structure_id, confs[:batch_size], logrew[:batch_size]) # discard the elements that were already present in the replay buffer
                 loss_smi.append(loss)
                 confs_smi.append(confs)
                 logit_pf_smi.append(logit_pf.detach())
