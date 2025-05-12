@@ -16,7 +16,7 @@ def parse_train_args():
     parser.add_argument('--cache', type=str, default=SCRATCH / 'torsional-diffusion/cache/test_run', help='Folder from where to load/restore cached dataset')
     parser.add_argument('--std_pickles', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/standardized_pickles', help='Folder in which the pickle are put after standardisation/matching')
     parser.add_argument('--split_path', type=str, default=SCRATCH / 'torsional-diffusion/DRUGS/split_boltz_10k.npy', help='Path of file defining the split')
-    parser.add_argument('--seed', type=int, default=0, help='Random seed')
+    parser.add_argument('--seed', type=int, default=1, help='Random seed')
     parser.add_argument('--use_wandb', type= bool, default=True, help='Whether to use wandb')
 
     
@@ -26,8 +26,9 @@ def parse_train_args():
     parser.add_argument('--use_synthetic_aug', type=bool, default= False, help='Whether to use synthetic augmentation')
 
     parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O  c1ccc2c(c1)C(=O)c3c(ccc(c3C2=O)N)N  C[C@@H]1CCCC[C@@H]1C  COc1ccccc1   CCC"  , help='train SMILES strings for which to generate conformers')
+    #parser.add_argument('--train_smis', type=str, default=   "C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COC=O"  , help='train SMILES strings for which to generate conformers')
     parser.add_argument('--limit_train_mols', type=int, default=None, help='Limit to the number of molecules in dataset, 0 uses them all')
-    parser.add_argument('--val_smis', type=str, default=   " CCS  C1C=CC[C@@H]2[C@@H]1C(=O)N(C2=O)SC(Cl)(Cl)Cl  COc1ccccc1  CC(=C)c1ccccc1  CCc1cccc2c1cccc2 "  , help='val SMILES strings for which to generate conformers')
+    parser.add_argument('--val_smis', type=str, default=   "CCc1cccc2c1cccc2  c1ccc(c(c1)C(F)(F)F)C(F)(F)F"  , help='val SMILES strings for which to generate conformers')
     parser.add_argument('--dataset', type=str, default='drugs', help='drugs or qm9')
     parser.add_argument('--n_smis_batch', type=int, default=None, help='Number of SMILES strings per batch')
     parser.add_argument('--n_local_structures', type=int, default=1, help= 'Number of local structures per smile to sample')  #TODO change!
@@ -51,6 +52,7 @@ def parse_train_args():
     parser.add_argument('--diffusion_steps', type=int, default=20, help='Number of diffusion steps')
 
     # eval args
+    parser.add_argument('--root_path', type=str, default='/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN', help='path to store model and evaluation results')
     parser.add_argument('--run_eval', type=bool, default=True, help='whether or not to run evaluation')
     parser.add_argument('--batch_size_eval', type=int, default=1024, help='Batch size for evaluation')
     parser.add_argument('--num_points', type=int, default=30, help='Number of points for evaluation')

@@ -51,6 +51,7 @@ def train(args, model, optimizer):
         ReplayBuffer = None
     seed_everything(args.seed)
     exp_path = f"{args.train_mode}_{args.energy_fn}_{args.seed}_n_mols_{args.limit_train_mols}_p_replay_{args.p_replay}_p_expl_{args.p_expl}_steps_{args.diffusion_steps}_max_n_local_structures_{args.max_n_local_structures}_use_synthetic_aug_{args.use_synthetic_aug}_lr_{args.lr}_T_{args.rew_temp}"
+    root_path = args.root_path
     if args.limit_train_mols == 1 : 
         exp_path += f"_smi_{args.train_smis}" 
     if args.use_wandb:
@@ -63,40 +64,47 @@ def train(args, model, optimizer):
     
     print("Starting GFN training ...")
     for k in tqdm(range(args.num_sgd_steps)):     
-        if k % 100 == 0:
+        if k % 1000 == 0:
             print('Saving the model ...')
-            # Save the current model in a folder model_chkpts
-            model_path = "/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/model_chkpts"
-            if not os.path.exists(f'{model_path}'):
-                os.makedirs(f'{model_path}')
-            torch.save(model.state_dict(), f'{model_path}/{exp_path}.pt')
+            save_model(model, root_path, exp_path)
             
-            print('Saving replay buffer ...')
+            
+            print('Saving replay buffer ...') #TODO ugly, rewrite
             if ReplayBuffer is not None:
-                replaybuffer_path = '/home/mila/l/lena-nehale.ezzine/scratch/torsionalGFN/replay_buffer'
-                if not os.path.exists(replaybuffer_path):
-                    os.makedirs(replaybuffer_path)
                 positions_dict, tas_dict = ReplayBuffer.get_positions_and_tas(train_smis)
-                pickle.dump({"rb_positions": positions_dict, "rb_tas": tas_dict}, open(f'{replaybuffer_path}/{exp_path}_{k}.pkl', 'wb'))
+                save_rb(positions_dict, tas_dict, root_path, exp_path, sgd_step = k)
             else:
                 positions_dict, tas_dict = None, None
             
             
             if args.run_eval:
-                print('Generating gfn samples and learned energy landscape...')
-                generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, train_mode = 'gflownet')
+                
+                print('testing generalisation to other unseen local structures ...')
+                av_smis, av_labels =  list(train_smis) + list(val_smis), ['train'] * len(train_smis) + ['val'] * len(val_smis)
+                generated_stuff_all_ls = generate_stuff(model, av_smis, args.n_smis_batch, 1, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, 500, np.inf, exp_path, sgd_step = k, train_mode = 'gflownet',  root_path = args.root_path )        
+                plot_energies_hist(av_smis, av_labels, generated_stuff_all_ls, rew_temp = args.rew_temp, root_path = args.root_path , exp_path = exp_path , sgd_step=k,  save=True)
                 torch.cuda.empty_cache()
-                plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, exp_path = exp_path, sgd_step = k, ode = args.ode, replay_tas= tas_dict )
-            
+
+                
+                print('Generating gfn samples and learned energy landscape for the seen local structures...')
+                generated_stuff = generate_stuff(model, train_smis, args.n_smis_batch, args.batch_size_eval, args.diffusion_steps, args.rew_temp, args.logrew_clamp, args.energy_fn, args.device, args.sigma_min, args.sigma_max, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, exp_path, sgd_step = k, train_mode = 'gflownet', root_path = args.root_path)
+                torch.cuda.empty_cache()
+                assert args.n_local_structures == 1, 'for now plotting the learned energy landscape only works for n_local_structures = 1'
+                plot_energy_samples_logpTs(model, train_smis, generated_stuff, args.energy_fn, args.logrew_clamp, args.init_positions_path, args.n_local_structures, args.max_n_local_structures, args.sigma_min, args.sigma_max,  args.diffusion_steps, args.device, args.num_points, args.num_back_trajs, args.rew_temp,  plot_energy_landscape = True, plot_sampled_confs = True, plot_pt = True, use_wandb = args.use_wandb, root_path = args.root_path, exp_path = exp_path, sgd_step = k, ode = args.ode, replay_tas= tas_dict )
+                plot_kde_2d(generated_stuff, root_path, exp_path, sgd_step = k)
+
+                
+                
         
-            logpTs = []
-            for smi in train_smis:
-                subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = 64, max_n_local_structures = np.inf) 
-                logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs) # effectuve bs: n_local_structures * num_back_trajs
-                logpTs.append(logpT)
-                print(f"LogpT {smi}: {logpT.mean()}")
-                if args.use_wandb:
-                    wandb.log({f"logpT {smi}": logpT.mean()})
+                print('Computing loglikelihood of a batch of MD data ...')
+                logpTs = []
+                for smi in train_smis:
+                    subset = make_dataset_from_smi([smi], init_positions_path=args.init_positions_path, n_local_structures = 64, max_n_local_structures = np.inf) 
+                    logpT = get_logpT(subset[smi], model, args.sigma_min, args.sigma_max,  args.diffusion_steps, device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), ode = False, num_trajs = args.num_back_trajs) # effectuve bs: n_local_structures * num_back_trajs
+                    logpTs.append(logpT)
+                    print(f"LogpT {smi}: {logpT.mean()}")
+                    if args.use_wandb:
+                        wandb.log({f"logpT {smi}": logpT.mean()})
         
             
     

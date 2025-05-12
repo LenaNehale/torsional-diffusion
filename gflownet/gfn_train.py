@@ -559,7 +559,7 @@ def gfn_sgd(model, dataset_dict, optimizer, device,  sigma_min, sigma_max, steps
         if train_mode in ['diffusion', 'mle']:
             if use_synthetic_aug:
                 synthetic_data = [make_synthetic_data(x) for x in gt_data]
-                synthetic_data = [x for l in synthetic_data for x in l]
+                synthetic_data = [x for l in synthetic_data for x in l] 
                 gt_data = gt_data + synthetic_data
         if train_mode == 'gflownet':
             samples_smi = [[copy.deepcopy(x) for _ in range(int(batch_size * (1 - p_replay))) ]  for x in gt_data] # shape: len(gt_data),  batch_size*(1 - p_replay)
