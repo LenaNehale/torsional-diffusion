@@ -224,7 +224,11 @@ def plot_energy_samples_logpTs(model, smis, generated_stuff, energy_fn, logrew_c
                     forward_kl = forward_kl.sum()   
                     wandb.log({f"KL(PB||PF)_{smi}_{ix0}_{ix1}": reverse_kl }, step = sgd_step)
                     wandb.log({f"KL(PF||PB)_{smi}_{ix0}_{ix1}": forward_kl }, step = sgd_step)
-                    jsd = None #todo add it
+                    p_avg =  1/ 2 * np.exp( logrew_normalized ) + 1/2 * np.exp(logpTs_normalized) # m = 1 / 2* (p_learned + p_true)
+                    logp_avg =  np.log(p_avg)
+                    jsd = 1/ 2 * np.exp(logrew_normalized) * (logrew_normalized - logp_avg) + 1/2 * np.exp(logpTs_normalized) * (logpTs_normalized - logp_avg)
+                    jsd = jsd.sum()
+                    wandb.log({f"JSD_{smi}_{ix0}_{ix1}": jsd }, step = sgd_step)
 
                 
                 #print(ix0, ix1)
